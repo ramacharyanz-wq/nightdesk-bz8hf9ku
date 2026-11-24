@@ -20,6 +20,9 @@ const Report = (() => {
     const { jsPDF } = window.jspdf; const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
     const W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight(), M = 36;
     const NAVY = [18, 29, 51], INK = [20, 32, 58], MUTE = [90, 104, 134], AMB = [255, 200, 97], SKY = [61, 99, 216], LINE = [217, 224, 238], SOFT = [244, 246, 251], RED = [210, 59, 59], GRN = [17, 144, 90], REDS = [252, 232, 232], GRNS = [226, 244, 235], ORG = [184, 98, 0];
+    // Variance colour: terminals more than Opera = orange, less = red, nil = green
+    const OVR = [212, 107, 8], OVRS = [253, 236, 220];
+    const vcol = v => cents(v) === 0 ? GRN : v > 0 ? OVR : RED, vsoft = v => cents(v) === 0 ? GRNS : v > 0 ? OVRS : REDS;
     const depts = Object.entries(res).filter(([, r]) => !r.skip);
     const bd = depts[0]?.[1].bd;
     const dayTxt = bd ? new Date(bd + 'T12:00:00').toLocaleDateString('en-NZ', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) : '';
@@ -42,13 +45,13 @@ const Report = (() => {
     depts.forEach(([dept, r], i) => {
       const x = M + i * (cw + 18), top = y, nil = cents(r.variance) === 0;
       doc.setFillColor(...SOFT); doc.roundedRect(x, top, cw, ch, 8, 8, 'F');
-      doc.setFillColor(...(nil ? GRN : RED)); doc.roundedRect(x, top, 6, ch, 3, 3, 'F'); doc.rect(x + 3, top, 3, ch, 'F');
+      doc.setFillColor(...vcol(r.variance)); doc.roundedRect(x, top, 6, ch, 3, 3, 'F'); doc.rect(x + 3, top, 3, ch, 'F');
       doc.setFont('helvetica', 'bold'); doc.setFontSize(14); doc.setTextColor(...INK); doc.text(dept === 'FO' ? 'Front Office' : 'Food & Beverage', x + 22, top + 30);
       const pill = nil ? 'BALANCED' : 'OUT ' + pm(r.variance); doc.setFontSize(8.5); const pw = doc.getTextWidth(pill) + 20;
-      doc.setFillColor(...(nil ? GRNS : REDS)); doc.roundedRect(x + cw - 18 - pw, top + 16, pw, 19, 9.5, 9.5, 'F'); doc.setTextColor(...(nil ? GRN : RED)); doc.text(pill, x + cw - 18 - pw / 2, top + 28.5, { align: 'center' });
+      doc.setFillColor(...vsoft(r.variance)); doc.roundedRect(x + cw - 18 - pw, top + 16, pw, 19, 9.5, 9.5, 'F'); doc.setTextColor(...vcol(r.variance)); doc.text(pill, x + cw - 18 - pw / 2, top + 28.5, { align: 'center' });
       const fw = (cw - 40) / 3;
       const fig = (k, v, cx, col) => { doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(...MUTE); doc.text(k, cx, top + 60); doc.setFont('helvetica', 'bold'); doc.setFontSize(15); doc.setTextColor(...(col || INK)); doc.text(v, cx, top + 80); };
-      fig('Terminals', pm(r.tTot), x + 22); fig('Opera D140', pm(r.dTot), x + 22 + fw); fig('Variance', nil ? '0.00' : pm(r.variance), x + 22 + 2 * fw, nil ? GRN : RED);
+      fig('Terminals', pm(r.tTot), x + 22); fig('Opera D140', pm(r.dTot), x + 22 + fw); fig('Variance', nil ? '0.00' : pm(r.variance), x + 22 + 2 * fw, vcol(r.variance));
       doc.setDrawColor(...LINE); doc.setLineWidth(0.8); doc.line(x + 22, top + 96, x + cw - 18, top + 96);
       const fix = r.ex.filter(e => e.kind !== 'dup' && e.kind !== 'missing').length;
       const pts = [`${fix} item${fix === 1 ? '' : 's'} to fix`, `${r.wrong.length} posting${r.wrong.length === 1 ? '' : 's'} on the wrong card code`, `${r.matches.length} matched transactions`];
@@ -77,7 +80,7 @@ const Report = (() => {
       body.push(['TOTAL', '', ...r.terms.map(t => pn0(r.termTot[t] || 0)), pn0(r.tTot), pn0(r.dTot), pn0(r.variance)]);
       const nc = 2 + r.terms.length + 3; const cs = { 0: { fontStyle: 'bold', cellWidth: 96 }, 1: { cellWidth: 52 } }; for (let i = 2; i < nc; i++) cs[i] = { halign: 'right' };
       y = table({ startY: y, head: [['Card type', 'Code', ...r.terms.map(t => 'Terminal ' + t), 'Terminals', 'Opera D140', 'Variance']], body, columnStyles: cs,
-        didParseCell: d => { if (d.section !== 'body') return; if (d.row.index === body.length - 1) { d.cell.styles.fontStyle = 'bold'; d.cell.styles.fillColor = SOFT; } if (d.column.index === nc - 1 && d.cell.raw !== '0.00') { d.cell.styles.textColor = RED; d.cell.styles.fontStyle = 'bold'; } } });
+        didParseCell: d => { if (d.section !== 'body') return; if (d.row.index === body.length - 1) { d.cell.styles.fontStyle = 'bold'; d.cell.styles.fillColor = SOFT; } if (d.column.index === nc - 1 && d.cell.raw !== "0.00") { const rv = d.row.index === body.length - 1 ? r.variance : r.sheet[types[d.row.index]].tt - r.sheet[types[d.row.index]].op; d.cell.styles.textColor = vcol(rv); d.cell.styles.fontStyle = 'bold'; } } });
       if (r.wrong.length) y = note('Card-type differences come from postings on the wrong card code. They cancel out in the total.', y + 14);
       y = need(y + 20, 80);
       const fixes = r.ex.filter(e => e.kind !== 'dup' && e.kind !== 'missing'), rest = r.ex.filter(e => e.kind === 'dup' || e.kind === 'missing');
@@ -85,7 +88,7 @@ const Report = (() => {
         body: list.map((e, i) => { const x = e.row, T = x.side === 'T'; return [i + 1, KIND[e.kind], pm(x.amt), e.kind === 'dup' ? 'none' : pm(e.effect),
           T ? clean(`${x.term}\n${x.time}  ${x.type} ..${x.l4}\nRRN ${x.rrn}`) : '-', T ? '-' : clean(`Page ${x.page}  Room ${x.room}\n${x.name}${x.receipt ? '\n#' + x.receipt : ''}\n${x.code} ${Engine.codeType(x.code)}`), clean(e.hint)]; }),
         columnStyles: { 0: { cellWidth: 20, halign: 'center' }, 1: { cellWidth: 96, fontStyle: 'bold' }, 2: { cellWidth: 60, halign: 'right' }, 3: { cellWidth: 56, halign: 'right' }, 4: { cellWidth: 128 }, 5: { cellWidth: 140 } },
-        didParseCell: d => { if (d.section === 'body' && d.column.index === 1) { const k = list[d.row.index].kind; d.cell.styles.textColor = k === 'terminal' || k === 'double' ? RED : k === 'opera' || k === 'declined' ? ORG : MUTE; } } });
+        didParseCell: d => { if (d.section === 'body' && d.column.index === 1) { const e = list[d.row.index]; d.cell.styles.textColor = e.kind === "dup" || !cents(e.effect) ? MUTE : vcol(e.effect); } if (d.section === "body" && d.column.index === 3) { const e = list[d.row.index]; if (e.kind !== "dup" && cents(e.effect)) { d.cell.styles.textColor = vcol(e.effect); d.cell.styles.fontStyle = "bold"; } } } });
       y = h2(`To fix (${fixes.length})`, y) + 4;
       y = fixes.length ? exTable(fixes, y) : note('Nothing to fix. Every posting matches a terminal transaction.', y + 8);
       if (rest.length) { y = need(y + 20, 80); y = h2(`Cannot be checked with this export (${rest.length})`, y) + 4; y = exTable(rest, y); }

@@ -112,6 +112,8 @@
   }
 
   /* ---------- receipts ---------- */
+  // Variance colour: terminals more than Opera = orange (over), less = red (under), nil = green
+  const vc = v => cents(v) === 0 ? "ok" : v > 0 ? "over" : "under";
   const deptName = d => d === 'FO' ? 'Front Office' : 'F&B';
   const fmtDate = (bd, o) => bd ? new Date(bd + 'T12:00:00').toLocaleDateString('en-NZ', o || { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }) : '';
   function receipt(dept, r, print) {
@@ -124,13 +126,13 @@
       <div class="ln"><span>TERMINALS</span><span>${plain(r.tTot)}</span></div>
       <div class="ln"><span>OPERA D140</span><span>${plain(r.dTot)}</span></div>
       <div class="rule"></div>
-      <div class="ln big"><span>VARIANCE</span><span>${plain(r.variance)}</span></div>
+      <div class="ln big"><span>VARIANCE</span><span class="v-${vc(r.variance)}">${plain(r.variance)}</span></div>
       ${r.checkable !== null ? `<div class="ln"><span>CHECKABLE</span><span>${plain(r.checkable)}</span></div>` : ''}
       <div class="rule"></div>
       <div class="ln"><span>TO FIX</span><span>${fix}</span></div>
       <div class="ln"><span>CARD CODES</span><span>${r.wrong.length}</span></div>
       <div class="ln"><span>MATCHED</span><span>${r.matches.length}</span></div>
-      <div class="stampwrap"><div class="stamp ${nil ? 'ok' : 'bad'}">${nil ? 'BALANCED' : 'OUT<small>' + esc(money(r.variance, true)) + '</small>'}</div></div>
+      <div class="stampwrap"><div class="stamp ${vc(r.variance)}">${nil ? 'BALANCED' : 'OUT<small>' + esc(money(r.variance, true)) + '</small>'}</div></div>
       <div class="bar"></div>
     </div></div></div>`;
   }
@@ -156,7 +158,7 @@
     const x = e.row, T = x.side === 'T';
     const term = T ? `<div class="loc">${ic.pos(18)}<div><div class="k">Terminal ${esc(x.term)}</div><div class="v">${esc(x.time)} · ${esc(x.type)} ••${esc(x.l4)} · RRN ${esc(x.rrn)}</div></div></div>` : `<div class="loc none">${ic.pos(18)}<div>No terminal transaction</div></div>`;
     const d140 = !T ? `<div class="loc">${ic.page(18)}<div><div class="k">D140 page ${esc(x.page)} · Room ${esc(x.room)}</div><div class="v">${esc(x.name)}${x.receipt ? ' · #' + esc(x.receipt) : ''}${x.ref ? ' · check ' + esc(x.ref) : ''} · ${esc(x.code)} ${esc(Engine.codeType(x.code))}</div></div></div>` : `<div class="loc none">${ic.page(18)}<div>Not in the D140</div></div>`;
-    return `<article class="fix k-${e.kind}"><div class="top"><span class="badge b-${e.kind}">${esc(KIND[e.kind])}</span><div class="amt"><b class="num">${money(x.amt)}</b><small>${e.kind === 'dup' ? 'counted once' : 'variance ' + money(e.effect, true)}</small></div></div>${term}${d140}<div class="hint">${esc(e.hint)}</div></article>`;
+    return `<article class="fix k-${e.kind}${e.kind === "dup" ? "" : " v-" + vc(e.effect)}"><div class="top"><span class="badge b-${e.kind}${e.kind === "dup" || !cents(e.effect) ? "" : " b-" + vc(e.effect)}">${esc(KIND[e.kind])}</span><div class="amt"><b class="num">${money(x.amt)}</b><small class="${e.kind === "dup" ? "" : "v-" + vc(e.effect)}">${e.kind === "dup" ? "counted once" : "variance " + money(e.effect, true)}</small></div></div>${term}${d140}<div class="hint">${esc(e.hint)}</div></article>`;
   }
   function sheetTSV(r) {
     const types = sheetTypes(r);
@@ -177,7 +179,7 @@
     const max = Math.max(1, ...types.map(ty => Math.max(Math.abs(r.sheet[ty].tt), Math.abs(r.sheet[ty].op))));
     const bars = types.map(ty => { const o = r.sheet[ty], v = o.tt - o.op;
       return `<div class="brow"><div class="lbl">${esc(ty)}<small>${esc(Engine.codeFor(r.dept, ty))}</small></div><div class="tracks"><div class="track"><i class="t" style="width:${Math.abs(o.tt) / max * 100}%"></i></div><div class="track"><i class="o" style="width:${Math.abs(o.op) / max * 100}%"></i></div></div>
-      <div class="vals num"><b>${plain(o.tt)}</b><br>${plain(o.op)}${cents(v) ? `<br><span class="pill bad">${money(v, true)}</span>` : ''}</div></div>`; }).join('');
+      <div class="vals num"><b>${plain(o.tt)}</b><br>${plain(o.op)}${cents(v) ? `<br><span class="pill ${vc(v)}">${money(v, true)}</span>` : ''}</div></div>`; }).join('');
     const tmax = Math.max(1, ...r.terms.map(t => Math.abs(r.termTot[t] || 0)));
     const terms = r.terms.map(t => `<div class="term"><div class="id">${ic.pos(16)}${esc(t)}</div><div class="org">${esc(r.termOrg[t])}</div><div class="amt num">${money(r.termTot[t] || 0)}</div><div class="share"><i style="width:${Math.abs(r.termTot[t] || 0) / tmax * 100}%"></i></div></div>`).join('');
 
@@ -193,13 +195,13 @@
     } else if (S.tab === 'sheet') {
       const st = sheetTypes(r);
       body = `<div class="tablewrap"><table><thead><tr><th>Card type</th><th>Code</th>${r.terms.map(t => `<th class="r">${esc(t)}</th>`).join('')}<th class="r">Terminals</th><th class="r">Opera</th><th class="r">Variance</th></tr></thead><tbody>
-        ${st.map(ty => { const o = r.sheet[ty], v = o.tt - o.op; return `<tr><td><b>${esc(ty)}</b></td><td>${esc(Engine.codeFor(r.dept, ty))}</td>${r.terms.map(t => `<td class="r">${o.t[t] ? plain(o.t[t]) : ''}</td>`).join('')}<td class="r"><b>${plain(o.tt)}</b></td><td class="r">${plain(o.op)}</td><td class="r ${cents(v) ? 'neg' : ''}">${plain(v)}</td></tr>`; }).join('')}
-        <tr class="tot"><td>Total</td><td></td>${r.terms.map(t => `<td class="r">${plain(r.termTot[t] || 0)}</td>`).join('')}<td class="r">${plain(r.tTot)}</td><td class="r">${plain(r.dTot)}</td><td class="r ${cents(r.variance) ? 'neg' : 'pos'}">${plain(r.variance)}</td></tr></tbody></table></div>`;
+        ${st.map(ty => { const o = r.sheet[ty], v = o.tt - o.op; return `<tr><td><b>${esc(ty)}</b></td><td>${esc(Engine.codeFor(r.dept, ty))}</td>${r.terms.map(t => `<td class="r">${o.t[t] ? plain(o.t[t]) : ''}</td>`).join('')}<td class="r"><b>${plain(o.tt)}</b></td><td class="r">${plain(o.op)}</td><td class="r ${cents(v) ? "v-" + vc(v) : ""}">${plain(v)}</td></tr>`; }).join('')}
+        <tr class="tot"><td>Total</td><td></td>${r.terms.map(t => `<td class="r">${plain(r.termTot[t] || 0)}</td>`).join('')}<td class="r">${plain(r.tTot)}</td><td class="r">${plain(r.dTot)}</td><td class="r ${cents(r.variance) ? "v-" + vc(r.variance) : "pos"}">${plain(r.variance)}</td></tr></tbody></table></div>`;
     } else {
       body = `<div class="tablewrap"><table><thead><tr><th>Opera posting</th><th>Page</th><th class="r">Opera</th><th>Terminal</th><th class="r">Terminal</th></tr></thead><tbody>${r.matches.map(m => `<tr><td>${m.d.map(x => `${esc(x.time)} · ${esc(x.name)} · Rm ${esc(x.room)}`).join('<br>')}</td><td>${m.d.map(x => esc(x.page)).join('<br>')}</td><td class="r">${m.d.map(x => plain(x.amt)).join('<br>')}</td><td>${m.t.map(y => `${esc(y.term)} · ${esc(y.time)} · ${esc(y.type)} ••${esc(y.l4)}`).join('<br>')}</td><td class="r">${m.t.map(y => plain(y.amt)).join('<br>')}</td></tr>`).join('')}</tbody></table></div>`;
     }
 
-    el.innerHTML = `<div class="dbar"><div class="seg" role="tablist">${['FO', 'F&B'].filter(d => S.res[d] && !S.res[d].skip).map(d => `<button class="${S.sel === d ? 'on' : ''}" data-d="${esc(d)}"><span class="dot ${cents(S.res[d].variance) ? 'bad' : 'ok'}"></span>${esc(deptName(d))}</button>`).join('')}</div><span class="spacer"></span>
+    el.innerHTML = `<div class="dbar"><div class="seg" role="tablist">${['FO', 'F&B'].filter(d => S.res[d] && !S.res[d].skip).map(d => `<button class="${S.sel === d ? 'on' : ''}" data-d="${esc(d)}"><span class="dot ${vc(S.res[d].variance)}"></span>${esc(deptName(d))}</button>`).join('')}</div><span class="spacer"></span>
       <button class="btn" id="b-copy">${ic.copy(18)}Copy sheet</button><button class="btn primary" id="b-pdf">${ic.down(18)}PDF report</button></div>
       <div class="grid2"><div class="panel"><h3>By card type<span class="legend"><span><i style="background:var(--amber)"></i>Terminals</span><span><i style="background:var(--sky)"></i>Opera</span></span></h3><div class="bars">${bars}</div></div>
       <div class="panel"><h3>Terminals</h3><div class="terms">${terms}</div></div></div>
@@ -240,7 +242,7 @@
     h.unshift({ bd: any.bd, at: Date.now(), fo: sum(S.res.FO), fb: sum(S.res['F&B']) });
     store.set('cr-history', h.sort((a, b) => b.bd.localeCompare(a.bd)).slice(0, 120));
   }
-  const vpill = s => !s ? '<span class="pill mute">—</span>' : cents(s.v) === 0 ? '<span class="pill ok">NIL</span>' : `<span class="pill bad">${money(s.v, true)}</span>`;
+  const vpill = s => !s ? '<span class="pill mute">—</span>' : cents(s.v) === 0 ? '<span class="pill ok">NIL</span>' : `<span class="pill ${vc(s.v)}">${money(s.v, true)}</span>`;
   function openHistory() {
     const h = store.get('cr-history', []);
     openDrawer('History', h.length ? `<div class="hist">${h.map((x, i) => `<div class="hrow"><div class="d">${esc(fmtDate(x.bd))}<small>FO · F&amp;B</small></div>${vpill(x.fo)}${vpill(x.fb)}<button data-i="${i}" aria-label="Delete">${ic.trash(16)}</button></div>`).join('')}</div>` : `<div class="nothing">${ic.clock(36)}<b>No audits yet</b><span>Each reconciliation is saved here on this device.</span></div>`);
