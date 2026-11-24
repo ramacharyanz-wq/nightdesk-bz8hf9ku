@@ -1,6 +1,4 @@
-    // The sheet covers FO, so F&B names typed in Settings stay.
-    const others = S.names.filter(n => n.custom && n.dept !== "FO" && !add.some(a => dgt(a.id) === dgt(n.id)));
-    S.names = add.map(a => keep(a.id) || a).concat(others);/* Card Recon UI */
+/* Card Recon UI */
 (() => {
   const $ = s => document.querySelector(s);
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
