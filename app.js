@@ -1,4 +1,6 @@
-/* Card Recon UI */
+    // The sheet covers FO, so F&B names typed in Settings stay.
+    const others = S.names.filter(n => n.custom && n.dept !== "FO" && !add.some(a => dgt(a.id) === dgt(n.id)));
+    S.names = add.map(a => keep(a.id) || a).concat(others);/* Card Recon UI */
 (() => {
   const $ = s => document.querySelector(s);
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -48,7 +50,12 @@
   const tname = (r, t) => (r.termName && r.termName[t]) || "Terminal " + t;
   function importNames(text) {
     const add = Engine.parseTermSheet(text); if (!add.length) { toast("No terminals found in that file"); return 0; }
-    for (const a of add) { const i = S.names.findIndex(n => dgt(n.id) === dgt(a.id)); if (i < 0) S.names.push(a); else if (!S.names[i].custom) S.names[i] = a; }
+    // The sheet replaces the saved list: terminals not in it (no longer used) are removed.
+    // Names typed in Settings for terminals that are still in the sheet are kept.
+    const keep = id => S.names.find(n => n.custom && dgt(n.id) === dgt(id));
+    // The sheet covers FO, so F&B names typed in Settings stay.
+    const others = S.names.filter(n => n.custom && n.dept !== "FO" && !add.some(a => dgt(a.id) === dgt(n.id)));
+    S.names = add.map(a => keep(a.id) || a).concat(others);
     store.set("cr-terms", S.names); toast(`${add.length} terminal names loaded`); return add.length;
   }
 
