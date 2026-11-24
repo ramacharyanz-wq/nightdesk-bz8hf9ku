@@ -267,3 +267,9 @@ td.v-under,.fix small.v-under{color:var(--under);font-weight:800}
 .stamp.over{color:#d46b08}.stamp.under{color:#cf2e2e}
 .receipt .v-over{color:#d46b08;font-weight:700}.receipt .v-under{color:#cf2e2e;font-weight:700}
 .fix.v-over{border-left:3px solid var(--over)}.fix.v-under{border-left:3px solid var(--under)}
+
+/* Terminal names (Settings) */
+.trow{grid-template-columns:minmax(0,1fr) 120px}
+.trow input{width:100%;background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:8px 10px;font-weight:700;font-size:14px;margin-bottom:4px}
+.trow input:focus{outline:2px solid var(--amber);outline-offset:1px}
+.trow .s b{color:var(--over)}

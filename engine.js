@@ -96,9 +96,47 @@ const Engine = (() => {
   }
   function batches(csvFiles) { const b = {}; for (const r of termRows(csvFiles)) if (r.batch_id) b[r.batch_id] = (b[r.batch_id] || 0) + 1; return b; }
 
+  /* ---------- terminal names ---------- */
+  // Names live on the device only (never in this code). Matching uses digits only, so
+  // "44742500-0001", "447425000001" or merchant 44742500 + terminal 0001 all match.
+  const dg = s => String(s == null ? "" : s).replace(/\D/g, "");
+  const isTermSheet = text => /TERMINAL[^,\n]*\([^)]*\)\s*-\s*\d/i.test(text) && !/terminal_id/i.test(text.slice(0, 2000));
+  function parseTermSheet(text) {
+    const out = [], seen = new Set(), re = /TERMINAL\s*(\d*)\s*\(([^)]+)\)\s*-\s*(\d[\d\s-]{3,}\d)/gi; let m;
+    while ((m = re.exec(text))) {
+      const id = m[3].replace(/\s+/g, ""), d = dg(id); if (seen.has(d)) continue; seen.add(d);
+      const lab = m[2].trim();
+      const dept = /f\s*&\s*b|restaurant|\bbar\b|cafe/i.test(lab) ? "F&B" : /\bFO\b|front|finance|refund|reserv/i.test(lab) ? "FO" : "";
+      out.push({ id, name: m[1] ? `Terminal ${m[1]} (${lab})` : `Terminal (${lab})`, dept });
+    }
+    const c = {}; for (const n of out) c[n.name] = (c[n.name] || 0) + 1;
+    for (const n of out) if (c[n.name] > 1) n.name += " ·" + dg(n.id).slice(-4);
+    return out;
+  }
+  function termLookup(names = []) {
+    const list = names.filter(n => dg(n.id)).map(n => ({ ...n, d: dg(n.id) })), cache = {};
+    return r => {
+      const t = dg(r.terminal_id), m = dg(r.merchant_id), k = m + "|" + t; if (k in cache) return cache[k];
+      const c = [t, m + t].filter(Boolean);
+      let hit = list.find(n => c.includes(n.d));
+      if (!hit && t.length >= 4) { const s = list.filter(n => n.d.endsWith(t) || (n.d.length >= 6 && t.endsWith(n.d))); if (s.length === 1) hit = s[0]; }
+      return (cache[k] = hit || null);
+    };
+  }
+  // Every terminal in the export, with the saved name it matched (for Settings).
+  function terminals(csvFiles, names = [], merch = {}) {
+    const all = termRows(csvFiles); learnFO(all); const look = termLookup(names), m = {};
+    for (const r of all) {
+      const k = (r.merchant_id || "") + "|" + r.terminal_id, hit = look(r);
+      m[k] = m[k] || { term: r.terminal_id, merchant: r.merchant_id, org: r["organisation.name"] || "", n: 0, hit, auto: merch[merchantKey(r)] || defaultDept(r) };
+      m[k].n++;
+    }
+    return Object.values(m).sort((a, b) => String(a.term).localeCompare(String(b.term)));
+  }
+
   /* ---------- reconcile ---------- */
-  function reconcile({ csvFiles, pdfFiles, merch = {}, basis = 'batch', batch = 'auto', dupOnce = true }) {
-    const all = termRows(csvFiles); learnFO(all);
+  function reconcile({ csvFiles, pdfFiles, merch = {}, names = [], basis = 'batch', batch = 'auto', dupOnce = true }) {
+    const all = termRows(csvFiles); learnFO(all); const look = termLookup(names);
     const D = { FO: [], 'F&B': [] }; for (const f of pdfFiles) for (const r of f.rows) D[r.dept].push({ ...r });
     const bdate = {};
     for (const dept of ['FO', 'F&B']) {
@@ -117,10 +155,10 @@ const Engine = (() => {
 
     const T = { FO: [], 'F&B': [] }, ignored = { FO: {}, 'F&B': {} }, declined = { FO: [], 'F&B': [] };
     for (const r of all) {
-      const dept = merch[merchantKey(r)] || defaultDept(r); if (dept === 'Ignore') continue;
+      const tinfo = look(r); const dept = (tinfo && tinfo.dept) || merch[merchantKey(r)] || defaultDept(r); if (dept === "Ignore") continue;
       const st = r.status || '', cur = num(r['Curr.amount']), orig = num(r['Orig.amount']);
       const a = (st === 'SALE AUTHORISED' && !isNaN(orig) && orig > cur) ? orig : cur; // refunded sale: count what was charged
-      const row = { side: 'T', dept, org: label(r, dept), term: r.terminal_id, date: r.created_at_date, time: (r.created_at_time || '').slice(0, 5),
+      const row = { side: 'T', dept, org: label(r, dept), term: r.terminal_id, tn: (tinfo && tinfo.name) || "Terminal " + r.terminal_id, date: r.created_at_date, time: (r.created_at_time || '').slice(0, 5),
         card: r.Product, type: cardType(r.Product), l4: String(r['card.last_four'] || '').padStart(4, '0'), bin: r['card.bin'], rrn: r.RRN, batch: r.batch_id, orig, status: st, amt: a };
       const counts = st === 'SALE AUTHORISED' || st === 'PREAUTH_COMPLETION AUTHORISED' || st === 'REFUND AUTHORISED';
       const isComp = st === 'PREAUTH_COMPLETION AUTHORISED';
@@ -184,18 +222,18 @@ const Engine = (() => {
         let kind = 'terminal', hint = 'Charged on the terminal, not posted in Opera.';
         if (cents(y.amt) === 0) hint = '$0.00 sale. Check what should have been charged.';
         else if (y.amt < 0) hint = 'Refunded on the terminal, no refund in Opera.';
-        else { const tw = counted.find(z => z !== y && z.l4 === y.l4 && cents(z.amt) === cents(y.amt)); if (tw) { kind = 'double'; hint = `Same card charged twice (also ${tw.time}, terminal ${tw.term}). Opera has it once.`; } }
+        else { const tw = counted.find(z => z !== y && z.l4 === y.l4 && cents(z.amt) === cents(y.amt)); if (tw) { kind = 'double'; hint = `Same card charged twice (also ${tw.time}, ${tw.tn}). Opera has it once.`; } }
         ex.push({ kind, effect: y.amt, row: y, hint });
       }
       let unverifiable = 0;
       for (const x of du) {
         let kind = 'opera', hint = x.amt < 0 ? 'Refund in Opera, no refund on any terminal.' : 'Posted in Opera, no card transaction found.';
         const dec = declined[dept].find(z => Math.abs(cents(z.amt)) === Math.abs(cents(x.amt)));
-        if (dec) { kind = 'declined'; hint = `${x.amt < 0 ? 'Refund' : 'Sale'} declined on terminal ${dec.term} at ${dec.time}, never approved.`; }
+        if (dec) { kind = 'declined'; hint = `${x.amt < 0 ? 'Refund' : 'Sale'} declined on ${dec.tn} at ${dec.time}, never approved.`; }
         else if (preauthStyle && dept === 'FO' && x.amt > 0) { kind = 'missing'; hint = `Not in this export. Likely a check-out with a pre-auth before ${startTxt}.`; unverifiable += x.amt; }
         ex.push({ kind, effect: -x.amt, row: x, hint });
       }
-      for (const y of dupRows) ex.push({ kind: 'dup', effect: 0, row: y, hint: `Export shows this completion twice (also ${y.dupOf.time}, terminal ${y.dupOf.term}). Counted once.` });
+      for (const y of dupRows) ex.push({ kind: 'dup', effect: 0, row: y, hint: `Export shows this completion twice (also ${y.dupOf.time}, ${y.dupOf.tn}). Counted once.` });
       ex.sort((a, b) => (a.kind === 'missing') - (b.kind === 'missing') || Math.abs(b.effect) - Math.abs(a.effect));
 
       const terms = [...new Set(counted.map(r => r.term))].sort();
@@ -204,6 +242,8 @@ const Engine = (() => {
       for (const x of d) { const ty = codeType(x.code); sheet[ty] = sheet[ty] || { t: {}, tt: 0, op: 0 }; sheet[ty].op += x.amt; }
       const termTot = {}; for (const r of counted) termTot[r.term] = (termTot[r.term] || 0) + r.amt;
       const termOrg = {}; for (const r of counted) termOrg[r.term] = r.org;
+      const termName = {}; for (const r of counted) termName[r.term] = r.tn;
+      terms.sort((a, b) => String(termName[a]).localeCompare(String(termName[b]), undefined, { numeric: true }));
       const wrong = [];
       for (const m of matches) { if (m.d.length !== 1 || m.t.length !== 1) continue; const x = m.d[0], y = m.t[0]; const ot = codeType(x.code); if (ot !== y.type) wrong.push({ x, y, from: ot, to: y.type, toCode: codeFor(dept, y.type) }); }
       const pdfFile = pdfFiles.find(f => f.rows.some(r => r.dept === dept));
@@ -212,11 +252,11 @@ const Engine = (() => {
         checkable: preauthStyle && dept === 'FO' && unverifiable ? (tTot - dTot) + unverifiable : null,
         warn: preauthStyle && dept === 'FO' ? `This export files check-outs under their pre-auth date and starts ${startTxt}. Check-outs with older pre-auths are missing. Export by settlement batch for a full check.` : '',
         grandOk: pdfFile ? pdfFile.grandOk : true,
-        tCount: counted.length, dCount: d.length, terms, termTot, termOrg, sheet, wrong, matches, offsets, ex, dupRows, ignored: ignored[dept]
+        tCount: counted.length, dCount: d.length, terms, termTot, termOrg, termName, sheet, wrong, matches, offsets, ex, dupRows, ignored: ignored[dept]
       };
     }
     return out;
   }
 
-  return { num, cents, parseCSV, pdfLines, parseD140, reconcile, merchants, batches, termRows, TYPES, codeType, codeFor, cardType };
+  return { isTermSheet, parseTermSheet, terminals, num, cents, parseCSV, pdfLines, parseD140, reconcile, merchants, batches, termRows, TYPES, codeType, codeFor, cardType };
 })();

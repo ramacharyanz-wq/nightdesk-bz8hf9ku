@@ -39,16 +39,27 @@
 
   /* ---------- state ---------- */
   const S = { csv: [], pdf: { FO: null, 'F&B': null }, err: {}, res: null, sel: 'FO', tab: null, busy: {},
-    opts: store.get('cr-opts', { basis: 'batch', batch: 'auto', dupOnce: true }), merch: store.get('cr-merch', {}) };
+    opts: store.get('cr-opts', { basis: 'batch', batch: 'auto', dupOnce: true }), merch: store.get("cr-merch", {}), names: store.get("cr-terms", []) };
 
   function toast(t) { const d = document.createElement('div'); d.className = 'toast'; d.textContent = t; document.body.appendChild(d); setTimeout(() => d.remove(), 2400); }
+
+  /* ---------- terminal names (saved on this device only) ---------- */
+  const dgt = s => String(s == null ? "" : s).replace(/\D/g, "");
+  const tname = (r, t) => (r.termName && r.termName[t]) || "Terminal " + t;
+  function importNames(text) {
+    const add = Engine.parseTermSheet(text); if (!add.length) { toast("No terminals found in that file"); return 0; }
+    for (const a of add) { const i = S.names.findIndex(n => dgt(n.id) === dgt(a.id)); if (i < 0) S.names.push(a); else if (!S.names[i].custom) S.names[i] = a; }
+    store.set("cr-terms", S.names); toast(`${add.length} terminal names loaded`); return add.length;
+  }
 
   /* ---------- files ---------- */
   async function addFiles(files, hint) {
     for (const f of files) {
       if (/\.csv$/i.test(f.name) || f.type === 'text/csv') {
         S.busy.csv = true; renderSlots();
-        try { const rows = Engine.parseCSV(await f.text()); S.csv = S.csv.filter(x => x.name !== f.name).concat({ name: f.name, rows }); delete S.err.csv; }
+        const text = await f.text();
+        if (Engine.isTermSheet(text)) { S.busy.csv = false; importNames(text); continue; }
+        try { const rows = Engine.parseCSV(text); S.csv = S.csv.filter(x => x.name !== f.name).concat({ name: f.name, rows }); delete S.err.csv; }
         catch (e) { S.err.csv = f.name + ': not a terminal export'; }
         S.busy.csv = false;
       } else if (/\.pdf$/i.test(f.name) || f.type === 'application/pdf') {
@@ -105,7 +116,7 @@
     renderSlots();
     const pdfs = Object.values(S.pdf).filter(Boolean);
     if (!S.csv.length || !pdfs.length) { S.res = null; renderAll(); return; }
-    try { S.res = Engine.reconcile({ csvFiles: S.csv, pdfFiles: pdfs, merch: mapping(), ...S.opts }); }
+    try { S.res = Engine.reconcile({ csvFiles: S.csv, pdfFiles: pdfs, merch: mapping(), names: S.names, ...S.opts }); }
     catch (e) { S.res = null; toast('Could not reconcile: ' + e.message); }
     if (S.res && !S.res[S.sel]) S.sel = S.res.FO ? 'FO' : 'F&B';
     S.tab = null; printSeq++; renderAll(true); saveHistory();
@@ -156,13 +167,13 @@
   const KIND = { terminal: 'Not in Opera', double: 'Double charge', opera: 'Not on terminal', declined: 'Declined on terminal', missing: 'Not in export', dup: 'Shown twice' };
   function fixCard(e) {
     const x = e.row, T = x.side === 'T';
-    const term = T ? `<div class="loc">${ic.pos(18)}<div><div class="k">Terminal ${esc(x.term)}</div><div class="v">${esc(x.time)} · ${esc(x.type)} ••${esc(x.l4)} · RRN ${esc(x.rrn)}</div></div></div>` : `<div class="loc none">${ic.pos(18)}<div>No terminal transaction</div></div>`;
+    const term = T ? `<div class="loc">${ic.pos(18)}<div><div class="k">${esc(x.tn || "Terminal " + x.term)}</div><div class="v">${esc(x.time)} · ${esc(x.type)} ••${esc(x.l4)} · RRN ${esc(x.rrn)}</div></div></div>` : `<div class="loc none">${ic.pos(18)}<div>No terminal transaction</div></div>`;
     const d140 = !T ? `<div class="loc">${ic.page(18)}<div><div class="k">D140 page ${esc(x.page)} · Room ${esc(x.room)}</div><div class="v">${esc(x.name)}${x.receipt ? ' · #' + esc(x.receipt) : ''}${x.ref ? ' · check ' + esc(x.ref) : ''} · ${esc(x.code)} ${esc(Engine.codeType(x.code))}</div></div></div>` : `<div class="loc none">${ic.page(18)}<div>Not in the D140</div></div>`;
     return `<article class="fix k-${e.kind}${e.kind === "dup" ? "" : " v-" + vc(e.effect)}"><div class="top"><span class="badge b-${e.kind}${e.kind === "dup" || !cents(e.effect) ? "" : " b-" + vc(e.effect)}">${esc(KIND[e.kind])}</span><div class="amt"><b class="num">${money(x.amt)}</b><small class="${e.kind === "dup" ? "" : "v-" + vc(e.effect)}">${e.kind === "dup" ? "counted once" : "variance " + money(e.effect, true)}</small></div></div>${term}${d140}<div class="hint">${esc(e.hint)}</div></article>`;
   }
   function sheetTSV(r) {
     const types = sheetTypes(r);
-    const head = ['Card type', 'Code', ...r.terms.map(t => 'Terminal ' + t), 'Terminals', 'Opera', 'Variance'];
+    const head = ['Card type', 'Code', ...r.terms.map(t => tname(r, t)), "Terminals", "Opera", "Variance"];
     const rows = types.map(ty => { const o = r.sheet[ty]; return [ty, Engine.codeFor(r.dept, ty), ...r.terms.map(t => (o.t[t] || 0).toFixed(2)), o.tt.toFixed(2), o.op.toFixed(2), (o.tt - o.op).toFixed(2)]; });
     rows.push(['Total', '', ...r.terms.map(t => (r.termTot[t] || 0).toFixed(2)), r.tTot.toFixed(2), r.dTot.toFixed(2), r.variance.toFixed(2)]);
     return [head, ...rows].map(a => a.join('\t')).join('\n');
@@ -181,7 +192,7 @@
       return `<div class="brow"><div class="lbl">${esc(ty)}<small>${esc(Engine.codeFor(r.dept, ty))}</small></div><div class="tracks"><div class="track"><i class="t" style="width:${Math.abs(o.tt) / max * 100}%"></i></div><div class="track"><i class="o" style="width:${Math.abs(o.op) / max * 100}%"></i></div></div>
       <div class="vals num"><b>${plain(o.tt)}</b><br>${plain(o.op)}${cents(v) ? `<br><span class="pill ${vc(v)}">${money(v, true)}</span>` : ''}</div></div>`; }).join('');
     const tmax = Math.max(1, ...r.terms.map(t => Math.abs(r.termTot[t] || 0)));
-    const terms = r.terms.map(t => `<div class="term"><div class="id">${ic.pos(16)}${esc(t)}</div><div class="org">${esc(r.termOrg[t])}</div><div class="amt num">${money(r.termTot[t] || 0)}</div><div class="share"><i style="width:${Math.abs(r.termTot[t] || 0) / tmax * 100}%"></i></div></div>`).join('');
+    const terms = r.terms.map(t => `<div class="term"><div class="id">${ic.pos(16)}${esc(tname(r, t))}</div><div class="org">${esc(r.termOrg[t])} · ${esc(t)}</div><div class="amt num">${money(r.termTot[t] || 0)}</div><div class="share"><i style="width:${Math.abs(r.termTot[t] || 0) / tmax * 100}%"></i></div></div>`).join('');
 
     let body = '';
     if (S.tab === 'fix') {
@@ -190,15 +201,15 @@
       if (rest.length) body += `<h3 style="margin:22px 0 12px;font-size:15px">Can't be checked with this export (${rest.length})</h3><div class="fixes">${rest.map(fixCard).join('')}</div>`;
       if (r.offsets.length) body += `<h3 style="margin:22px 0 12px;font-size:15px">Cancel out, no effect (${r.offsets.length})</h3><div class="list">${r.offsets.map(o => `<div class="lrow"><span class="g">${esc(o.side === 'Opera' ? o.a.name + ' · Rm ' + o.a.room : o.a.type + ' ••' + o.a.l4)}</span><span class="m room">${esc(o.side)}</span><span class="m pg">${o.side === 'Opera' ? 'p.' + esc(o.a.page) : ''}</span><span class="m rc">${esc(o.a.time)} / ${esc(o.b.time)}</span><span class="amtc num">${money(o.a.amt)}</span><span class="move"><span class="chip to">+${plain(o.a.amt)}</span><span class="chip from" style="text-decoration:none">${plain(o.b.amt)}</span></span></div>`).join('')}</div>`;
     } else if (S.tab === 'codes') {
-      body = r.wrong.length ? `<div class="lhead"><span>Guest</span><span>Room</span><span>Page</span><span>Receipt</span><span>Amount</span><span>Move code</span></div><div class="list">${r.wrong.map(w => `<div class="lrow"><span class="g">${esc(w.x.name)}</span><span class="m room">${esc(w.x.room)}</span><span class="m pg">p.${esc(w.x.page)}</span><span class="m rc">${w.x.receipt ? '#' + esc(w.x.receipt) : esc(w.x.ref.slice(-8))}</span><span class="amtc num">${money(w.x.amt)}</span><span class="move"><span class="chip from">${esc(w.x.code)} ${esc(w.from)}</span>${ic.arrow(16)}<span class="chip to">${esc(w.toCode)} ${esc(w.to)}</span><span class="m">••${esc(w.y.l4)} · ${esc(w.y.term)} ${esc(w.y.time)}</span></span></div>`).join('')}</div>`
+      body = r.wrong.length ? `<div class="lhead"><span>Guest</span><span>Room</span><span>Page</span><span>Receipt</span><span>Amount</span><span>Move code</span></div><div class="list">${r.wrong.map(w => `<div class="lrow"><span class="g">${esc(w.x.name)}</span><span class="m room">${esc(w.x.room)}</span><span class="m pg">p.${esc(w.x.page)}</span><span class="m rc">${w.x.receipt ? '#' + esc(w.x.receipt) : esc(w.x.ref.slice(-8))}</span><span class="amtc num">${money(w.x.amt)}</span><span class="move"><span class="chip from">${esc(w.x.code)} ${esc(w.from)}</span>${ic.arrow(16)}<span class="chip to">${esc(w.toCode)} ${esc(w.to)}</span><span class="m">••${esc(w.y.l4)} · ${esc(w.y.tn)} ${esc(w.y.time)}</span></span></div>`).join('')}</div>`
         : `<div class="nothing">${ic.party(40)}<b>All on the right card code</b></div>`;
     } else if (S.tab === 'sheet') {
       const st = sheetTypes(r);
-      body = `<div class="tablewrap"><table><thead><tr><th>Card type</th><th>Code</th>${r.terms.map(t => `<th class="r">${esc(t)}</th>`).join('')}<th class="r">Terminals</th><th class="r">Opera</th><th class="r">Variance</th></tr></thead><tbody>
+      body = `<div class="tablewrap"><table><thead><tr><th>Card type</th><th>Code</th>${r.terms.map(t => `<th class="r">${esc(tname(r, t))}</th>`).join('')}<th class="r">Terminals</th><th class="r">Opera</th><th class="r">Variance</th></tr></thead><tbody>
         ${st.map(ty => { const o = r.sheet[ty], v = o.tt - o.op; return `<tr><td><b>${esc(ty)}</b></td><td>${esc(Engine.codeFor(r.dept, ty))}</td>${r.terms.map(t => `<td class="r">${o.t[t] ? plain(o.t[t]) : ''}</td>`).join('')}<td class="r"><b>${plain(o.tt)}</b></td><td class="r">${plain(o.op)}</td><td class="r ${cents(v) ? "v-" + vc(v) : ""}">${plain(v)}</td></tr>`; }).join('')}
         <tr class="tot"><td>Total</td><td></td>${r.terms.map(t => `<td class="r">${plain(r.termTot[t] || 0)}</td>`).join('')}<td class="r">${plain(r.tTot)}</td><td class="r">${plain(r.dTot)}</td><td class="r ${cents(r.variance) ? "v-" + vc(r.variance) : "pos"}">${plain(r.variance)}</td></tr></tbody></table></div>`;
     } else {
-      body = `<div class="tablewrap"><table><thead><tr><th>Opera posting</th><th>Page</th><th class="r">Opera</th><th>Terminal</th><th class="r">Terminal</th></tr></thead><tbody>${r.matches.map(m => `<tr><td>${m.d.map(x => `${esc(x.time)} · ${esc(x.name)} · Rm ${esc(x.room)}`).join('<br>')}</td><td>${m.d.map(x => esc(x.page)).join('<br>')}</td><td class="r">${m.d.map(x => plain(x.amt)).join('<br>')}</td><td>${m.t.map(y => `${esc(y.term)} · ${esc(y.time)} · ${esc(y.type)} ••${esc(y.l4)}`).join('<br>')}</td><td class="r">${m.t.map(y => plain(y.amt)).join('<br>')}</td></tr>`).join('')}</tbody></table></div>`;
+      body = `<div class="tablewrap"><table><thead><tr><th>Opera posting</th><th>Page</th><th class="r">Opera</th><th>Terminal</th><th class="r">Terminal</th></tr></thead><tbody>${r.matches.map(m => `<tr><td>${m.d.map(x => `${esc(x.time)} · ${esc(x.name)} · Rm ${esc(x.room)}`).join('<br>')}</td><td>${m.d.map(x => esc(x.page)).join('<br>')}</td><td class="r">${m.d.map(x => plain(x.amt)).join('<br>')}</td><td>${m.t.map(y => `${esc(y.tn)} · ${esc(y.time)} · ${esc(y.type)} ••${esc(y.l4)}`).join('<br>')}</td><td class="r">${m.t.map(y => plain(y.amt)).join('<br>')}</td></tr>`).join('')}</tbody></table></div>`;
     }
 
     el.innerHTML = `<div class="dbar"><div class="seg" role="tablist">${['FO', 'F&B'].filter(d => S.res[d] && !S.res[d].skip).map(d => `<button class="${S.sel === d ? 'on' : ''}" data-d="${esc(d)}"><span class="dot ${vc(S.res[d].variance)}"></span>${esc(deptName(d))}</button>`).join('')}</div><span class="spacer"></span>
@@ -257,6 +268,7 @@
       <div class="field"><label for="o-batch">Batch</label><select id="o-batch"><option value="auto">Day after the D140 date</option>${Object.keys(bs).sort().map(b => `<option value="${esc(b)}" ${S.opts.batch === b ? 'selected' : ''}>${esc(b)} · ${bs[b]} rows</option>`).join('')}</select></div>
       <label class="switch"><input type="checkbox" id="o-dup" ${S.opts.dupOnce ? 'checked' : ''}>Count a completion shown twice only once</label>
       ${ms.length ? `<div class="field"><span>Merchants</span>${ms.map((m, i) => `<div class="mrow"><div><div class="n">${esc(m.name)}</div><div class="s">${esc(m.id)} · ${esc(m.terms.join(', '))}</div></div><select data-k="${esc(m.key)}" id="m-${i}"><option ${m.dept === 'FO' ? 'selected' : ''}>FO</option><option value="F&B" ${m.dept === 'F&B' ? 'selected' : ''}>F&amp;B</option><option ${m.dept === 'Ignore' ? 'selected' : ''}>Ignore</option></select></div>`).join('')}</div>` : ''}
+      ${termSection()}
       <button class="btn" id="o-clear">${ic.trash(18)}Clear all files</button>`);
     const B = $('#drawer-body'); const save = () => { store.set('cr-opts', S.opts); run(); };
     B.querySelectorAll('#o-basis button').forEach(b => b.addEventListener('click', () => { S.opts.basis = b.dataset.v; B.querySelectorAll('#o-basis button').forEach(x => x.classList.toggle('on', x === b)); save(); }));
@@ -264,7 +276,34 @@
     $('#o-batch').addEventListener('change', e => { S.opts.batch = e.target.value; save(); });
     $('#o-dup').addEventListener('change', e => { S.opts.dupOnce = e.target.checked; save(); });
     B.querySelectorAll('select[data-k]').forEach(s => s.addEventListener('change', () => { S.merch[s.dataset.k] = s.value; store.set('cr-merch', S.merch); run(); }));
+    wireTerms(B);
     $('#o-clear').addEventListener('click', () => { S.csv = []; S.pdf = { FO: null, 'F&B': null }; S.err = {}; closeDrawer(); run(); });
+  }
+
+  function termSection() {
+    const ts = Engine.terminals(S.csv, S.names, mapping()), used = new Set();
+    const sel = (v, auto) => `<select class="tdept" aria-label="Department"><option value="" ${!v ? "selected" : ""}>Auto${auto ? " (" + esc(auto) + ")" : ""}</option>${["FO", "F&B", "Ignore"].map(o => `<option value="${esc(o)}" ${v === o ? "selected" : ""}>${esc(o)}</option>`).join("")}</select>`;
+    const row = (key, name, ph, sub, dept, auto) => `<div class="mrow trow" data-key="${esc(key)}"><div><input class="tname" value="${esc(name)}" placeholder="${esc(ph)}" aria-label="Terminal name"><div class="s">${sub}</div></div>${sel(dept, auto)}</div>`;
+    const seen = ts.map(t => { const i = t.hit ? S.names.findIndex(n => n.id === t.hit.id) : -1; if (i >= 0) used.add(i);
+      return row(i >= 0 ? "n:" + i : "new:" + (t.merchant || "") + "|" + t.term, i >= 0 ? S.names[i].name : "", "Terminal " + t.term, `${esc(t.term)}${t.merchant ? " · merchant " + esc(t.merchant) : ""} · ${t.n} rows${i >= 0 ? "" : " · <b>no name yet</b>"}`, i >= 0 ? S.names[i].dept : "", t.auto); }).join("");
+    const rest = S.names.map((n, i) => used.has(i) ? "" : row("n:" + i, n.name, "Terminal", esc(n.id), n.dept, "")).join("");
+    return `<div class="field"><span>Terminals</span>
+      <div class="s" style="font-size:12.5px;color:var(--muted)">Names and departments are saved on this device only. A department set here overrides the merchant.</div>
+      <label class="btn" for="o-tfile">${ic.doc(18)}Import terminal sheet (.csv)<input type="file" id="o-tfile" accept=".csv,text/csv" hidden></label>
+      ${ts.length ? `<div class="s" style="font-size:12.5px;font-weight:700">In tonight's export (${ts.length})</div>${seen}` : ""}
+      ${rest ? `<details><summary style="cursor:pointer;font-size:12.5px;font-weight:700">Other saved terminals (${S.names.length - used.size})</summary><div style="display:grid;gap:8px;margin-top:8px">${rest}</div></details>` : ""}
+      ${S.names.length ? `<button class="btn" id="o-tclear">${ic.trash(18)}Clear terminal names</button>` : ""}</div>`;
+  }
+  function wireTerms(B) {
+    const save = () => { store.set("cr-terms", S.names); run(); };
+    const entry = el => { let k = el.dataset.key; if (k.startsWith("n:")) return S.names[+k.slice(2)];
+      const [m, t] = k.slice(4).split("|"); S.names.push({ id: (m ? m + "-" : "") + t, name: "", dept: "" }); el.dataset.key = "n:" + (S.names.length - 1); return S.names[S.names.length - 1]; };
+    B.querySelectorAll(".trow").forEach(el => {
+      el.querySelector(".tname").addEventListener("change", e => { const n = entry(el); n.name = e.target.value.trim(); n.custom = true; save(); });
+      el.querySelector(".tdept").addEventListener("change", e => { const n = entry(el); n.dept = e.target.value; n.custom = true; save(); });
+    });
+    const f = B.querySelector("#o-tfile"); if (f) f.addEventListener("change", async () => { if (f.files[0] && importNames(await f.files[0].text())) { run(); openSettings(); } });
+    const c = B.querySelector("#o-tclear"); if (c) c.addEventListener("click", () => { if (!confirm("Remove all saved terminal names on this device?")) return; S.names = []; save(); openSettings(); });
   }
 
   /* ---------- drawer ---------- */
