@@ -123,7 +123,8 @@
     if (!S.csv.length || !pdfs.length) { S.res = null; renderAll(); return; }
     try { S.res = Engine.reconcile({ csvFiles: S.csv, pdfFiles: pdfs, merch: mapping(), names: S.names, ...S.opts }); }
     catch (e) { S.res = null; toast('Could not reconcile: ' + e.message); }
-    if (S.res && !S.res[S.sel]) S.sel = S.res.FO ? 'FO' : 'F&B';
+    // Show details for a department that has results (e.g. only the F&B D140 was loaded).
+    if (S.res && (!S.res[S.sel] || S.res[S.sel].skip)) S.sel = ['FO', 'F&B'].find(d => S.res[d] && !S.res[d].skip) || S.sel;
     S.tab = null; printSeq++; renderAll(true); saveHistory();
   }
 
