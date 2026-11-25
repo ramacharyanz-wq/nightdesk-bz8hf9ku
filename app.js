@@ -39,7 +39,7 @@
 
   /* ---------- state ---------- */
   const S = { csv: [], pdf: { FO: null, 'F&B': null }, err: {}, res: null, sel: 'FO', tab: null, busy: {},
-    opts: store.get('cr-opts', { basis: 'batch', batch: 'auto', dupOnce: true }), merch: store.get("cr-merch", {}), names: store.get("cr-terms", []) };
+    opts: store.get('cr-opts', { basis: 'batch', batch: 'auto', dupOnce: true }), merch: store.get("cr-merch", {}), names: store.get("cr-terms", []), cashiers: store.get("cr-cashiers", {}) };
 
   function toast(t) { const d = document.createElement('div'); d.className = 'toast'; d.textContent = t; document.body.appendChild(d); setTimeout(() => d.remove(), 2400); }
 
@@ -125,7 +125,7 @@
     renderSlots();
     const pdfs = Object.values(S.pdf).filter(Boolean);
     if (!S.csv.length || !pdfs.length) { S.res = null; renderAll(); return; }
-    try { S.res = Engine.reconcile({ csvFiles: S.csv, pdfFiles: pdfs, merch: mapping(), names: S.names, ...S.opts }); }
+    try { S.res = Engine.reconcile({ csvFiles: S.csv, pdfFiles: pdfs, merch: mapping(), names: S.names, cashiers: S.cashiers, ...S.opts }); }
     catch (e) { S.res = null; toast('Could not reconcile: ' + e.message); }
     // Show details for a department that has results (e.g. only the F&B D140 was loaded).
     if (S.res && (!S.res[S.sel] || S.res[S.sel].skip)) S.sel = ['FO', 'F&B'].find(d => S.res[d] && !S.res[d].skip) || S.sel;
@@ -181,14 +181,14 @@
     const x = e.row, T = x.side === 'T', P = e.pair; // P: the Opera posting a tip charge matched
     const term = T ? `<div class="loc">${ic.pos(18)}<div><div class="k">${esc(x.tn || "Terminal " + x.term)}</div><div class="v">${esc(x.time)} · ${esc(x.type)} ••${esc(x.l4)} · RRN ${esc(x.rrn)}</div></div></div>` : `<div class="loc none">${ic.pos(18)}<div>No terminal transaction</div></div>`;
     const dx = T ? P : x;
-    const d140 = dx ? `<div class="loc">${ic.page(18)}<div><div class="k">D140 page ${esc(dx.page)} · Room ${esc(dx.room)}${P ? ' · ' + esc(money(dx.amt)) : ''}</div><div class="v">${esc(dx.name)}${dx.receipt ? ' · #' + esc(dx.receipt) : ''}${dx.ref ? ' · check ' + esc(dx.ref) : ''} · ${esc(dx.code)} ${esc(Engine.codeType(dx.code))}</div></div></div>` : `<div class="loc none">${ic.page(18)}<div>Not in the D140</div></div>`;
+    const d140 = dx ? `<div class="loc">${ic.page(18)}<div><div class="k">D140 page ${esc(dx.page)} · Room ${esc(dx.room)}${P ? ' · ' + esc(money(dx.amt)) : ''}</div><div class="v">${esc(dx.name)}${dx.receipt ? ' · #' + esc(dx.receipt) : ''}${dx.ref ? ' · check ' + esc(dx.ref) : ''} · ${esc(dx.code)} ${esc(Engine.codeType(dx.code))}${dx.by ? ' · by ' + esc(dx.by) : ''}</div></div></div>` : `<div class="loc none">${ic.page(18)}<div>Not in the D140</div></div>`;
     return `<article class="fix k-${e.kind}${e.kind === "dup" ? "" : " v-" + vc(e.effect)}"><div class="top"><span class="badge b-${e.kind}${e.kind === "dup" || !cents(e.effect) ? "" : " b-" + vc(e.effect)}">${esc(KIND[e.kind])}</span><div class="amt"><b class="num">${money(x.amt)}</b><small class="${e.kind === "dup" ? "" : "v-" + vc(e.effect)}">${e.kind === "dup" ? "counted once" : "variance " + money(e.effect, true)}</small></div></div>${term}${d140}<div class="hint">${esc(e.hint)}</div></article>`;
   }
   // A pair that balances only on amount: show both sides so a person can confirm it.
   function checkCard(m) {
     const amt = m.t.reduce((a, y) => a + y.amt, 0);
     const T = m.t.map(y => `<div class="loc">${ic.pos(18)}<div><div class="k">${esc(y.tn)} · ${esc(money(y.amt))}</div><div class="v">${esc(y.time)} · ${esc(y.type)} ••${esc(y.l4)} · RRN ${esc(y.rrn || '-')}</div></div></div>`).join('');
-    const D = m.d.map(x => `<div class="loc">${ic.page(18)}<div><div class="k">D140 page ${esc(x.page)} · Room ${esc(x.room)} · ${esc(money(x.amt))}</div><div class="v">${esc(x.name)}${x.receipt ? ' · #' + esc(x.receipt) : ''} · ${esc(x.code)} ${esc(Engine.codeType(x.code))}${x.l4 ? ' ••' + esc(x.l4) : ''}</div></div></div>`).join('');
+    const D = m.d.map(x => `<div class="loc">${ic.page(18)}<div><div class="k">D140 page ${esc(x.page)} · Room ${esc(x.room)} · ${esc(money(x.amt))}</div><div class="v">${esc(x.name)}${x.receipt ? ' · #' + esc(x.receipt) : ''} · ${esc(x.code)} ${esc(Engine.codeType(x.code))}${x.l4 ? ' ••' + esc(x.l4) : ''}${x.by ? ' · by ' + esc(x.by) : ''}</div></div></div>`).join('');
     return `<article class="fix k-check"><div class="top"><span class="badge b-check">Check</span><div class="amt"><b class="num">${money(amt)}</b><small>balances on amount</small></div></div>${T}${D}<div class="hint">${esc(m.why)}. Confirm it is the same guest and payment.</div></article>`;
   }
   function sheetTSV(r) {
@@ -223,14 +223,14 @@
       if (checks.length) body += `<h3 style="margin:${fixes.length ? 22 : 0}px 0 4px;font-size:15px">Check these (${checks.length})</h3><p style="margin:0 0 12px;color:var(--muted);font-size:13px">These balance only on amount. They may be fine, or two separate mistakes that cancel out. Look at both sides.</p><div class="fixes">${checks.map(checkCard).join('')}</div>`;
       if (rest.length) body += `<h3 style="margin:22px 0 12px;font-size:15px">Can't be checked with this export (${rest.length})</h3><div class="fixes">${rest.map(fixCard).join('')}</div>`;
       if (otherNight.length) body += `<h3 style="margin:22px 0 4px;font-size:15px">From another night, not counted (${otherNight.length})</h3><p style="margin:0 0 12px;color:var(--muted);font-size:13px">Completions in this export from a different batch that match nothing in tonight's D140.</p><div class="list">${otherNight.map(y => `<div class="lrow"><span class="g">${esc(y.type)} ••${esc(y.l4)}</span><span class="m room">Batch ${esc(y.batch || '')}</span><span class="m pg">${esc(y.date || '')}</span><span class="m rc">${esc(y.time)}</span><span class="amtc num">${money(y.amt)}</span><span class="move"><span class="chip to">${esc(y.tn)}</span></span></div>`).join('')}</div>`;
-      if (nonCard.length) body += `<h3 style="margin:22px 0 4px;font-size:15px">Not card payments, not checked (${nonCard.length})</h3><div class="list">${nonCard.map(x => `<div class="lrow"><span class="g">${esc(x.name)}</span><span class="m room">Rm ${esc(x.room)}</span><span class="m pg">p.${esc(x.page)}</span><span class="m rc">${esc(x.code)}</span><span class="amtc num">${money(x.amt)}</span><span class="move"></span></div>`).join('')}</div>`;
+      if (nonCard.length) body += `<h3 style="margin:22px 0 4px;font-size:15px">Not card payments, not checked (${nonCard.length})</h3><div class="list">${nonCard.map(x => `<div class="lrow"><span class="g">${esc(x.name)}${x.by ? " · by " + esc(x.by) : ""}</span><span class="m room">Rm ${esc(x.room)}</span><span class="m pg">p.${esc(x.page)}</span><span class="m rc">${esc(x.code)}</span><span class="amtc num">${money(x.amt)}</span><span class="move"></span></div>`).join('')}</div>`;
       const xi = r.crossIn || [], xo = r.crossOut || [];
       if (xi.length || xo.length) body += `<h3 style="margin:22px 0 4px;font-size:15px">Used another department's terminal (${xi.length + xo.length})</h3><p style="margin:0 0 12px;color:var(--muted);font-size:13px">Nothing to fix in Opera. Each charge is counted in the department where it was posted.</p><div class="list">${
         xi.map(c => `<div class="lrow"><span class="g">${esc(c.d ? c.d.name + ' · Rm ' + c.d.room : 'No posting matched')}</span><span class="m room">Posted ${esc(S.sel)}</span><span class="m pg">${c.d ? 'p.' + esc(c.d.page) : ''}</span><span class="m rc">${c.d && c.d.receipt ? '#' + esc(c.d.receipt) : ''}</span><span class="amtc num">${money(c.t.amt)}</span><span class="move"><span class="chip to">${esc(c.t.tn)} · ${esc(c.t.org)}</span><span class="m">${esc(c.t.time)} · ${esc(c.t.type)} ••${esc(c.t.l4)}</span></span></div>`).join('') +
         xo.map(c => `<div class="lrow"><span class="g">${esc(c.t.type)} ••${esc(c.t.l4)}${c.d ? ' · ' + esc(c.d.name) : ''}</span><span class="m room">Posted ${esc(c.d ? c.d.dept : '')}</span><span class="m pg">${c.d ? 'p.' + esc(c.d.page) : ''}</span><span class="m rc">${c.d && c.d.receipt ? '#' + esc(c.d.receipt) : ''}</span><span class="amtc num">${money(c.t.amt)}</span><span class="move"><span class="chip to">${esc(c.t.tn)} · ${esc(c.t.org)}</span><span class="m">${esc(c.t.time)}</span></span></div>`).join('')}</div>`;
       if (r.offsets.length) body += `<h3 style="margin:22px 0 12px;font-size:15px">Cancel out, no effect (${r.offsets.length})</h3><div class="list">${r.offsets.map(o => `<div class="lrow"><span class="g">${esc(o.side === 'Opera' ? o.a.name + ' · Rm ' + o.a.room : o.a.type + ' ••' + o.a.l4)}</span><span class="m room">${esc(o.side)}</span><span class="m pg">${o.side === 'Opera' ? 'p.' + esc(o.a.page) : ''}</span><span class="m rc">${esc(o.a.time)} / ${esc(o.b.time)}</span><span class="amtc num">${money(o.a.amt)}</span><span class="move"><span class="chip to">+${plain(o.a.amt)}</span><span class="chip from" style="text-decoration:none">${plain(o.b.amt)}</span></span></div>`).join('')}</div>`;
     } else if (S.tab === 'codes') {
-      body = r.wrong.length ? `<div class="lhead"><span>Guest</span><span>Room</span><span>Page</span><span>Receipt</span><span>Amount</span><span>Move code</span></div><div class="list">${r.wrong.map(w => `<div class="lrow"><span class="g">${esc(w.x.name)}</span><span class="m room">${esc(w.x.room)}</span><span class="m pg">p.${esc(w.x.page)}</span><span class="m rc">${w.x.receipt ? '#' + esc(w.x.receipt) : esc(w.x.ref.slice(-8))}</span><span class="amtc num">${money(w.x.amt)}</span><span class="move"><span class="chip from">${esc(w.x.code)} ${esc(w.from)}</span>${ic.arrow(16)}<span class="chip to">${esc(w.toCode)} ${esc(w.to)}</span><span class="m">••${esc(w.y.l4)} · ${esc(w.y.tn)} ${esc(w.y.time)}</span></span></div>`).join('')}</div>`
+      body = r.wrong.length ? `<div class="lhead"><span>Guest</span><span>Room</span><span>Page</span><span>Receipt</span><span>Amount</span><span>Move code</span></div><div class="list">${r.wrong.map(w => `<div class="lrow"><span class="g">${esc(w.x.name)}${w.x.by ? `<small style="display:block;font-weight:500;color:var(--muted);font-size:12px">by ${esc(w.x.by)}</small>` : ""}</span><span class="m room">${esc(w.x.room)}</span><span class="m pg">p.${esc(w.x.page)}</span><span class="m rc">${w.x.receipt ? '#' + esc(w.x.receipt) : esc(w.x.ref.slice(-8))}</span><span class="amtc num">${money(w.x.amt)}</span><span class="move"><span class="chip from">${esc(w.x.code)} ${esc(w.from)}</span>${ic.arrow(16)}<span class="chip to">${esc(w.toCode)} ${esc(w.to)}</span><span class="m">••${esc(w.y.l4)} · ${esc(w.y.tn)} ${esc(w.y.time)}</span></span></div>`).join('')}</div>`
         : `<div class="nothing">${ic.party(40)}<b>All on the right card code</b></div>`;
     } else if (S.tab === 'sheet') {
       const st = sheetTypes(r);
@@ -238,7 +238,7 @@
         ${st.map(ty => { const o = r.sheet[ty], v = o.tt - o.op; return `<tr><td><b>${esc(ty)}</b></td><td>${esc(Engine.codeFor(r.dept, ty))}</td>${r.terms.map(t => `<td class="r">${o.t[t] ? plain(o.t[t]) : ''}</td>`).join('')}<td class="r"><b>${plain(o.tt)}</b></td><td class="r">${plain(o.op)}</td><td class="r ${cents(v) ? "v-" + vc(v) : ""}">${plain(v)}</td></tr>`; }).join('')}
         <tr class="tot"><td>Total</td><td></td>${r.terms.map(t => `<td class="r">${plain(r.termTot[t] || 0)}</td>`).join('')}<td class="r">${plain(r.tTot)}</td><td class="r">${plain(r.dTot)}</td><td class="r ${cents(r.variance) ? "v-" + vc(r.variance) : "pos"}">${plain(r.variance)}</td></tr></tbody></table></div>`;
     } else {
-      body = `<div class="tablewrap"><table><thead><tr><th>Opera posting</th><th>Page</th><th class="r">Opera</th><th>Terminal</th><th class="r">Terminal</th></tr></thead><tbody>${r.matches.map(m => `<tr><td>${m.d.map(x => `${esc(x.time)} · ${esc(x.name)} · Rm ${esc(x.room)}`).join('<br>')}</td><td>${m.d.map(x => esc(x.page)).join('<br>')}</td><td class="r">${m.d.map(x => plain(x.amt)).join('<br>')}</td><td>${m.t.map(y => `${esc(y.tn)} · ${esc(y.time)} · ${esc(y.type)} ••${esc(y.l4)}`).join('<br>')}</td><td class="r">${m.t.map(y => plain(y.amt)).join('<br>')}</td></tr>`).join('')}</tbody></table></div>`;
+      body = `<div class="tablewrap"><table><thead><tr><th>Opera posting</th><th>Page</th><th class="r">Opera</th><th>Terminal</th><th class="r">Terminal</th></tr></thead><tbody>${r.matches.map(m => `<tr><td>${m.d.map(x => `${esc(x.time)} · ${esc(x.name)} · Rm ${esc(x.room)}${x.by ? ' · by ' + esc(x.by) : ''}`).join('<br>')}</td><td>${m.d.map(x => esc(x.page)).join('<br>')}</td><td class="r">${m.d.map(x => plain(x.amt)).join('<br>')}</td><td>${m.t.map(y => `${esc(y.tn)} · ${esc(y.time)} · ${esc(y.type)} ••${esc(y.l4)}`).join('<br>')}</td><td class="r">${m.t.map(y => plain(y.amt)).join('<br>')}</td></tr>`).join('')}</tbody></table></div>`;
     }
 
     el.innerHTML = `<div class="dbar"><div class="seg" role="tablist">${['FO', 'F&B'].filter(d => S.res[d] && !S.res[d].skip).map(d => `<button class="${S.sel === d ? 'on' : ''}" data-d="${esc(d)}"><span class="dot ${vc(S.res[d].variance)}"></span>${esc(deptName(d))}</button>`).join('')}</div><span class="spacer"></span>
@@ -306,6 +306,7 @@
       <label class="switch"><input type="checkbox" id="o-dup" ${S.opts.dupOnce ? 'checked' : ''}>Count a completion shown twice only once</label>
       ${ms.length ? `<div class="field"><span>Merchants</span>${ms.map((m, i) => `<div class="mrow"><div><div class="n">${esc(m.name)}</div><div class="s">${esc(m.id)} · ${esc(m.terms.join(', '))}</div></div><select data-k="${esc(m.key)}" id="m-${i}"><option ${m.dept === 'FO' ? 'selected' : ''}>FO</option><option value="F&B" ${m.dept === 'F&B' ? 'selected' : ''}>F&amp;B</option><option ${m.dept === 'Ignore' ? 'selected' : ''}>Ignore</option></select></div>`).join('')}</div>` : ''}
       ${termSection()}
+      ${cashierSection()}
       <button class="btn" id="o-clear">${ic.trash(18)}Clear all files</button>`);
     const B = $('#drawer-body'); const save = () => { store.set('cr-opts', S.opts); run(); };
     B.querySelectorAll('#o-basis button').forEach(b => b.addEventListener('click', () => { S.opts.basis = b.dataset.v; B.querySelectorAll('#o-basis button').forEach(x => x.classList.toggle('on', x === b)); save(); }));
@@ -314,10 +315,31 @@
     $('#o-cross').addEventListener('change', e => { S.opts.cross = e.target.checked; save(); });
     $('#o-dup').addEventListener('change', e => { S.opts.dupOnce = e.target.checked; save(); });
     B.querySelectorAll('select[data-k]').forEach(s => s.addEventListener('change', () => { S.merch[s.dataset.k] = s.value; store.set('cr-merch', S.merch); run(); }));
-    wireTerms(B);
+    wireTerms(B); wireCashiers(B);
     $('#o-clear').addEventListener('click', () => { S.csv = []; S.pdf = { FO: null, 'F&B': null }; S.err = {}; closeDrawer(); run(); });
   }
 
+  // Cashier names for the Cash ID on each D140 line. Saved on this device only.
+  function cashierSection() {
+    const seen = {};
+    for (const p of Object.values(S.pdf)) if (p) for (const r of p.rows) if (r.cashier) { const c = seen[r.cashier] = seen[r.cashier] || { id: r.cashier, users: new Set(), n: 0, depts: new Set() }; if (r.user) c.users.add(r.user); c.n++; c.depts.add(r.dept); }
+    const ids = Object.keys(seen).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    const rest = Object.keys(S.cashiers).filter(id => !seen[id]).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    const row = (id, sub) => `<div class="mrow trow crow" data-id="${esc(id)}"><div><input class="cname" value="${esc(S.cashiers[id] || '')}" placeholder="Name for cashier ${esc(id)}" aria-label="Name for cashier ${esc(id)}"><div class="s">${sub}</div></div><div class="s" style="text-align:right;font-weight:700">#${esc(id)}</div></div>`;
+    return `<div class="field"><span>Cashiers</span>
+      <div class="s" style="font-size:12.5px;color:var(--muted)">Name each Cash ID from the D140. Names are used in the notes and the PDF, and saved on this device only.</div>
+      ${ids.length ? `<div class="s" style="font-size:12.5px;font-weight:700">In tonight's D140 (${ids.length})</div>` + ids.map(id => row(id, `${esc([...seen[id].users].join(', ') || 'no login')} · ${seen[id].n} posting${seen[id].n === 1 ? '' : 's'} · ${[...seen[id].depts].join(', ')}${S.cashiers[id] ? '' : ' · <b>no name yet</b>'}`)).join('') : '<div class="s" style="font-size:12.5px;color:var(--muted)">Load a D140 to see its cashiers.</div>'}
+      ${rest.length ? `<details><summary style="cursor:pointer;font-size:12.5px;font-weight:700">Other saved cashiers (${rest.length})</summary><div style="display:grid;gap:8px;margin-top:8px">${rest.map(id => row(id, 'Not in tonight\'s D140')).join('')}</div></details>` : ''}
+      ${Object.keys(S.cashiers).length ? `<button class="btn" id="o-cclear">${ic.trash(18)}Clear cashier names</button>` : ''}</div>`;
+  }
+  function wireCashiers(B) {
+    B.querySelectorAll('.crow').forEach(el => el.querySelector('.cname').addEventListener('change', e => {
+      const v = e.target.value.trim(); if (v) S.cashiers[el.dataset.id] = v; else delete S.cashiers[el.dataset.id];
+      const nb = el.querySelector('.s b'); if (nb) nb.hidden = !!v;
+      store.set('cr-cashiers', S.cashiers); run();
+    }));
+    const c = B.querySelector('#o-cclear'); if (c) c.addEventListener('click', () => { if (!confirm('Remove all saved cashier names on this device?')) return; S.cashiers = {}; store.set('cr-cashiers', S.cashiers); run(); openSettings(); });
+  }
   function termSection() {
     const ts = Engine.terminals(S.csv, S.names, mapping()), used = new Set();
     const sel = (v, auto) => `<select class="tdept" aria-label="Department"><option value="" ${!v ? "selected" : ""}>Auto${auto ? " (" + esc(auto) + ")" : ""}</option>${["FO", "F&B", "Ignore"].map(o => `<option value="${esc(o)}" ${v === o ? "selected" : ""}>${esc(o)}</option>`).join("")}</select>`;
@@ -336,7 +358,7 @@
     const save = () => { store.set("cr-terms", S.names); run(); };
     const entry = el => { let k = el.dataset.key; if (k.startsWith("n:")) return S.names[+k.slice(2)];
       const [m, t] = k.slice(4).split("|"); S.names.push({ id: (m ? m + "-" : "") + t, name: "", dept: "" }); el.dataset.key = "n:" + (S.names.length - 1); return S.names[S.names.length - 1]; };
-    B.querySelectorAll(".trow").forEach(el => {
+    B.querySelectorAll(".trow:not(.crow)").forEach(el => {
       el.querySelector(".tname").addEventListener("change", e => { const n = entry(el); n.name = e.target.value.trim(); n.custom = true; save(); });
       el.querySelector(".tdept").addEventListener("change", e => { const n = entry(el); n.dept = e.target.value; n.custom = true; save(); });
     });

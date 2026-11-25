@@ -51,7 +51,9 @@ const Engine = (() => {
       const l4 = (nxt.match(/X{6,}(\d{4})/) || nxt.match(/\b(?:VS|MC|AX|AMEX|VISA)\s*\*{0,3}(\d{4})\b/i) || [])[1] || '';
       const receipt = (nxt.match(/#(\d{5,})/) || [])[1] || '';
       const amt = +(num(m[8]) - num(m[7])).toFixed(2); if (amt === 0) return;
-      rows.push({ side: 'D', date: m[1], time: m[2], room: m[3], name, code: m[5], ref, l4, receipt, page: pages[i], amt, dept: m[5].startsWith('917') ? 'F&B' : 'FO', file });
+      const cm = l.slice(m.index + m[0].length).match(/^\s*(\d{1,6})(?:-([A-Za-z0-9._]+))?/); // Cash ID + User Name
+      const cashier = cm ? cm[1] : '', user = cm && cm[2] ? cm[2].replace(/@.*/, '') : '';
+      rows.push({ side: 'D', date: m[1], time: m[2], room: m[3], name, code: m[5], ref, l4, receipt, page: pages[i], amt, dept: m[5].startsWith('917') ? 'F&B' : 'FO', file, cashier, user });
     });
     if (!rows.length) throw new Error('No D140 postings found');
     const total = rows.reduce((a, r) => a + r.amt, 0);
@@ -140,14 +142,16 @@ const Engine = (() => {
 
   /* ---------- reconcile ---------- */
   // moves: { rowKey: dept } — terminal charges counted in another department (see reconcile below).
-  function reconcileOnce({ csvFiles, pdfFiles, merch = {}, names = [], basis = 'batch', batch = 'auto', dupOnce = true }, moves = {}) {
+  function reconcileOnce({ csvFiles, pdfFiles, merch = {}, names = [], cashiers = {}, basis = 'batch', batch = 'auto', dupOnce = true }, moves = {}) {
+    // Who posted it: the cashier's name from Settings, else "cashier 479".
+    const by = r => r.cashier ? (cashiers[r.cashier] || 'cashier ' + r.cashier) : '';
     const all = termRows(csvFiles); learnFO(all); const look = termLookup(names);
     // Only card payment codes are checked against terminals. Bank transfers (xxx11) are left out quietly;
     // any other non-card code is left out and listed.
     const D = { FO: [], 'F&B': [] }, nonCard = { FO: [], 'F&B': [] };
     for (const f of pdfFiles) for (const r of f.rows) {
       const sfx = String(r.code).slice(-2);
-      if (Object.values(SUF).includes(sfx)) D[r.dept].push({ ...r }); else if (sfx !== '11') nonCard[r.dept].push({ ...r });
+      if (Object.values(SUF).includes(sfx)) D[r.dept].push({ ...r, by: by(r) }); else if (sfx !== '11') nonCard[r.dept].push({ ...r, by: by(r) });
     }
     const bdate = {};
     for (const dept of ['FO', 'F&B']) {
@@ -260,13 +264,14 @@ const Engine = (() => {
       }
       let unverifiable = 0;
       for (const x of du) {
-        let kind = 'opera', hint = x.amt < 0 ? 'Refund in Opera, no refund on any terminal.' : 'Posted in Opera, no card transaction found.';
+        const pb = x.by ? ` by ${x.by}` : '';
+        let kind = 'opera', hint = x.amt < 0 ? `Refund posted in Opera${pb}, no refund on any terminal.` : `Posted in Opera${pb}, no card transaction found.`;
         const dec = declined[dept].find(z => Math.abs(cents(z.amt)) === Math.abs(cents(x.amt)));
-        if (dec) { kind = 'declined'; hint = `${x.amt < 0 ? 'Refund' : 'Sale'} declined on ${dec.tn} at ${dec.time}, never approved.`; }
-        else if (preauthStyle && dept === 'FO' && x.amt > 0) { kind = 'missing'; hint = `Not in this export. Likely a check-out with a pre-auth before ${startTxt}.`; unverifiable += x.amt; }
+        if (dec) { kind = 'declined'; hint = `${x.amt < 0 ? 'Refund' : 'Sale'} declined on ${dec.tn} at ${dec.time}, never approved, but posted in Opera${pb}.`; }
+        else if (preauthStyle && dept === 'FO' && x.amt > 0) { kind = "missing"; hint = `Not in this export. Likely a check-out with a pre-auth before ${startTxt}.${x.by ? " Posted by " + x.by + "." : ""}`; unverifiable += x.amt; }
         ex.push({ kind, effect: -x.amt, row: x, hint });
       }
-      for (const { x, y } of tips) ex.push({ kind: 'tip', effect: y.amt - x.amt, row: y, pair: x, hint: `Tip of ${$(y.grat)} charged on the terminal. Opera has the bill without it (${$(x.amt)}). Post the tip in Opera.` });
+      for (const { x, y } of tips) ex.push({ kind: 'tip', effect: y.amt - x.amt, row: y, pair: x, hint: `Tip of ${$(y.grat)} charged on the terminal. Opera has the bill without it (${$(x.amt)}${x.by ? ', posted by ' + x.by : ''}). Post the tip in Opera.` });
       for (const y of dupRows) ex.push({ kind: 'dup', effect: 0, row: y, hint: `Export shows this completion twice (also ${y.dupOf.time}, ${y.dupOf.tn}). Counted once.` });
       ex.sort((a, b) => (a.kind === 'missing') - (b.kind === 'missing') || Math.abs(b.effect) - Math.abs(a.effect));
 
@@ -284,7 +289,7 @@ const Engine = (() => {
       // Matches that balance only on amount: different card numbers, or two items against one.
       // Two separate mistakes can cancel out this way, so they are listed to check, not hidden.
       const checks = matches.filter(m => m.how === 'split' || (m.how === 'amount' && m.d[0].l4 && m.t[0].l4 && m.d[0].l4 !== m.t[0].l4))
-        .map(m => ({ ...m, why: m.how === 'split' ? (m.d.length > 1 ? 'Two Opera postings add up to one card charge' : 'Two card charges add up to one Opera posting') : `Same amount, different cards (Opera ••${m.d[0].l4}, terminal ••${m.t[0].l4})` }));
+        .map(m => ({ ...m, why: m.how === 'split' ? (m.d.length > 1 ? 'Two Opera postings add up to one card charge' : 'Two card charges add up to one Opera posting') : `Same amount, different cards (Opera ••${m.d[0].l4}${m.d[0].by ? ', posted by ' + m.d[0].by : ''}; terminal ••${m.t[0].l4})` }));
       const tbx = basis === 'batch' ? tBatch[dept] : null;
       const batchNote = tbx && batchSet.size && !batchFound(tbx) ? `No row in this export has batch ${tbx}, so sales were counted by transaction date (${bdate[dept]}) instead. Check the batch in Settings if this is wrong.` : '';
       out[dept] = {

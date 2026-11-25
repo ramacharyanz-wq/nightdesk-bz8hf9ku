@@ -86,7 +86,7 @@ const Report = (() => {
       const fixes = r.ex.filter(e => e.kind !== 'dup' && e.kind !== 'missing'), rest = r.ex.filter(e => e.kind === 'dup' || e.kind === 'missing');
       const exTable = (list, y) => table({ startY: y, head: [['#', 'What', 'Amount', 'Effect', 'Terminal', 'D140', 'Action']],
         body: list.map((e, i) => { const x = e.row, T = x.side === 'T'; return [i + 1, KIND[e.kind], pm(x.amt), e.kind === 'dup' ? 'none' : pm(e.effect),
-          T ? clean(`${x.tn || x.term}\n${x.time}  ${x.type} ..${x.l4}\nRRN ${x.rrn}`) : '-', T ? (e.pair ? clean(`Page ${e.pair.page}  Room ${e.pair.room}\n${e.pair.name}\nPosted ${e.pair.amt.toFixed(2)}`) : '-') : clean(`Page ${x.page}  Room ${x.room}\n${x.name}${x.receipt ? '\n#' + x.receipt : ''}\n${x.code} ${Engine.codeType(x.code)}`), clean(e.hint)]; }),
+          T ? clean(`${x.tn || x.term}\n${x.time}  ${x.type} ..${x.l4}\nRRN ${x.rrn}`) : '-', T ? (e.pair ? clean(`Page ${e.pair.page}  Room ${e.pair.room}\n${e.pair.name}\nPosted ${e.pair.amt.toFixed(2)}${e.pair.by ? ' by ' + e.pair.by : ''}`) : '-') : clean(`Page ${x.page}  Room ${x.room}\n${x.name}${x.receipt ? '\n#' + x.receipt : ''}\n${x.code} ${Engine.codeType(x.code)}${x.by ? '\nby ' + x.by : ''}`), clean(e.hint)]; }),
         columnStyles: { 0: { cellWidth: 20, halign: 'center' }, 1: { cellWidth: 96, fontStyle: 'bold' }, 2: { cellWidth: 60, halign: 'right' }, 3: { cellWidth: 56, halign: 'right' }, 4: { cellWidth: 128 }, 5: { cellWidth: 140 } },
         didParseCell: d => { if (d.section === 'body' && d.column.index === 1) { const e = list[d.row.index]; d.cell.styles.textColor = e.kind === "dup" || !cents(e.effect) ? MUTE : vcol(e.effect); } if (d.section === "body" && d.column.index === 3) { const e = list[d.row.index]; if (e.kind !== "dup" && cents(e.effect)) { d.cell.styles.textColor = vcol(e.effect); d.cell.styles.fontStyle = "bold"; } } } });
       y = h2(`To fix (${fixes.length})`, y) + 4;
@@ -97,7 +97,7 @@ const Report = (() => {
         y = need(y + 20, 80); y = h2(`Check these (${ck.length})`, y) + 4;
         y = note('These balance only on amount. They may be fine, or two separate mistakes that cancel out. Confirm it is the same guest and payment.', y + 8) - 2;
         y = table({ startY: y, head: [['#', 'Why', 'Terminal', 'D140']],
-          body: ck.map((m, i) => [i + 1, clean(m.why), clean(m.t.map(t => `${t.tn}  ${t.time}  ${t.type} ..${t.l4}  ${t.amt.toFixed(2)}`).join('\n')), clean(m.d.map(x => `Page ${x.page}  Room ${x.room}  ${x.name}  ${x.code}${x.l4 ? ' ..' + x.l4 : ''}  ${x.amt.toFixed(2)}`).join('\n'))]),
+          body: ck.map((m, i) => [i + 1, clean(m.why), clean(m.t.map(t => `${t.tn}  ${t.time}  ${t.type} ..${t.l4}  ${t.amt.toFixed(2)}`).join('\n')), clean(m.d.map(x => `Page ${x.page}  Room ${x.room}  ${x.name}  ${x.code}${x.l4 ? ' ..' + x.l4 : ''}  ${x.amt.toFixed(2)}${x.by ? '  by ' + x.by : ''}`).join('\n'))]),
           columnStyles: { 0: { cellWidth: 20, halign: 'center' }, 1: { cellWidth: 170, fontStyle: 'bold', textColor: ORG } } });
       }
       const on = r.otherNight || [], ncp = r.nonCard || [];
@@ -117,7 +117,7 @@ const Report = (() => {
       y = need(y + 20, 80);
       y = h2(`Wrong card code (${r.wrong.length})`, y) + 4;
       y = r.wrong.length ? table({ startY: y, head: [['#', 'Guest', 'Room', 'Page', 'Receipt', 'Amount', 'Posted on', 'Card used', 'Terminal', 'Move to']],
-        body: r.wrong.map((w, i) => [i + 1, clean(w.x.name), w.x.room, w.x.page, w.x.receipt ? '#' + w.x.receipt : clean(w.x.ref), pm(w.x.amt), `${w.x.code} ${w.from}`, `${w.to} ..${w.y.l4}`, `${(w.y.tn || w.y.term)}  ${w.y.time}`, `${w.toCode} ${w.to}`]),
+        body: r.wrong.map((w, i) => [i + 1, clean(w.x.name + (w.x.by ? '\nby ' + w.x.by : '')), w.x.room, w.x.page, w.x.receipt ? '#' + w.x.receipt : clean(w.x.ref), pm(w.x.amt), `${w.x.code} ${w.from}`, `${w.to} ..${w.y.l4}`, `${(w.y.tn || w.y.term)}  ${w.y.time}`, `${w.toCode} ${w.to}`]),
         columnStyles: { 0: { cellWidth: 20, halign: 'center' }, 2: { halign: 'center' }, 3: { halign: 'center' }, 5: { halign: 'right' }, 9: { fontStyle: 'bold', textColor: SKY } } }) : note('None.', y + 8);
       if (r.offsets.length) { y = need(y + 20, 60); y = h2('Cancel out, no effect', y) + 4;
         table({ startY: y, head: [['Where', 'Guest / card', 'Amounts', 'Find it']], body: r.offsets.map(o => [o.side, clean(o.side === 'Opera' ? `${o.a.name}  Room ${o.a.room}` : `${o.a.type} ..${o.a.l4}`), `${pm(o.a.amt)} / ${pm(o.b.amt)}`, o.side === 'Opera' ? `Page ${o.a.page} at ${o.a.time}, ${o.b.time}` : `${(o.a.tn || o.a.term)} ${o.a.time}, ${(o.b.tn || o.b.term)} ${o.b.time}`]), columnStyles: { 2: { halign: 'right' } } }); }
