@@ -273,3 +273,6 @@ td.v-under,.fix small.v-under{color:var(--under);font-weight:800}
 .trow input{width:100%;background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:8px 10px;font-weight:700;font-size:14px;margin-bottom:4px}
 .trow input:focus{outline:2px solid var(--amber);outline-offset:1px}
 .trow .s b{color:var(--over)}
+
+/* Info banner (charges on another department's terminal) */
+.banner.info{background:var(--sky-soft);color:var(--sky)}

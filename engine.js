@@ -135,7 +135,8 @@ const Engine = (() => {
   }
 
   /* ---------- reconcile ---------- */
-  function reconcile({ csvFiles, pdfFiles, merch = {}, names = [], basis = 'batch', batch = 'auto', dupOnce = true }) {
+  // moves: { rowKey: dept } — terminal charges counted in another department (see reconcile below).
+  function reconcileOnce({ csvFiles, pdfFiles, merch = {}, names = [], basis = 'batch', batch = 'auto', dupOnce = true }, moves = {}) {
     const all = termRows(csvFiles); learnFO(all); const look = termLookup(names);
     const D = { FO: [], 'F&B': [] }; for (const f of pdfFiles) for (const r of f.rows) D[r.dept].push({ ...r });
     const bdate = {};
@@ -155,25 +156,28 @@ const Engine = (() => {
 
     const T = { FO: [], 'F&B': [] }, ignored = { FO: {}, 'F&B': {} }, declined = { FO: [], 'F&B': [] };
     for (const r of all) {
-      const tinfo = look(r); const dept = (tinfo && tinfo.dept) || merch[merchantKey(r)] || defaultDept(r); if (dept === "Ignore") continue;
+      const tinfo = look(r); const home = (tinfo && tinfo.dept) || merch[merchantKey(r)] || defaultDept(r); if (home === "Ignore") continue;
       const st = r.status || '', cur = num(r['Curr.amount']), orig = num(r['Orig.amount']);
+      const key = (r.RRN || r._id) + '|' + st, dept = moves[key] || home;
       const a = (st === 'SALE AUTHORISED' && !isNaN(orig) && orig > cur) ? orig : cur; // refunded sale: count what was charged
-      const row = { side: 'T', dept, org: label(r, dept), term: r.terminal_id, tn: (tinfo && tinfo.name) || "Terminal " + r.terminal_id, date: r.created_at_date, time: (r.created_at_time || '').slice(0, 5),
+      const row = { side: 'T', key, home, dept, org: label(r, home), term: r.terminal_id, tn: (tinfo && tinfo.name) || "Terminal " + r.terminal_id, date: r.created_at_date, time: (r.created_at_time || '').slice(0, 5),
         card: r.Product, type: cardType(r.Product), l4: String(r['card.last_four'] || '').padStart(4, '0'), bin: r['card.bin'], rrn: r.RRN, batch: r.batch_id, orig, status: st, amt: a };
       const counts = st === 'SALE AUTHORISED' || st === 'PREAUTH_COMPLETION AUTHORISED' || st === 'REFUND AUTHORISED';
       const isComp = st === 'PREAUTH_COMPLETION AUTHORISED';
-      const useBatch = basis === 'batch' && r.batch_id && tBatch[dept];
-      if (counts && !isComp && useBatch && String(r.batch_id) !== tBatch[dept]) { ignored[dept]['Other batch'] = (ignored[dept]['Other batch'] || 0) + 1; continue; }
-      if (counts && !isComp && !useBatch && bdate[dept] && row.date && row.date !== bdate[dept]) { ignored[dept]['Other date'] = (ignored[dept]['Other date'] || 0) + 1; continue; }
+      // Filter by the terminal's own department; if that D140 isn't loaded, use the other one's date.
+      const tb = tBatch[home] || tBatch.FO || tBatch['F&B'], bdt = bdate[home] || bdate.FO || bdate['F&B'];
+      const useBatch = basis === 'batch' && r.batch_id && tb;
+      if (counts && !isComp && useBatch && String(r.batch_id) !== tb) { ignored[dept]['Other batch'] = (ignored[dept]['Other batch'] || 0) + 1; continue; }
+      if (counts && !isComp && !useBatch && bdt && row.date && row.date !== bdt) { ignored[dept]['Other date'] = (ignored[dept]['Other date'] || 0) + 1; continue; }
       if (st === 'SALE AUTHORISED' || isComp) T[dept].push(row);
       else if (st === 'REFUND AUTHORISED') { row.amt = -a; T[dept].push(row); }
       else { const k = st.replace(' AUTHORISED', '').replace('_', ' ').toLowerCase(); ignored[dept][k] = (ignored[dept][k] || 0) + 1; if (/DECLINED/.test(st)) declined[dept].push(row); }
     }
 
-    const out = {};
+    const out = {}, left = { T: {}, D: {} };
     for (const dept of ['FO', 'F&B']) {
       const t = T[dept], d = D[dept];
-      if (!d.length) { if (t.length) out[dept] = { skip: true, tCount: t.length }; continue; }
+      if (!d.length) { if (t.length) out[dept] = { skip: true, tCount: t.length }; left.T[dept] = t.filter(r => r.home === dept); continue; }
       const cs = t.filter(r => r.status === 'PREAUTH_COMPLETION AUTHORISED');
       for (const r of cs) {
         if (isNaN(r.orig) || cents(r.orig) === cents(r.amt)) continue;
@@ -252,8 +256,42 @@ const Engine = (() => {
         checkable: preauthStyle && dept === 'FO' && unverifiable ? (tTot - dTot) + unverifiable : null,
         warn: preauthStyle && dept === 'FO' ? `This export files check-outs under their pre-auth date and starts ${startTxt}. Check-outs with older pre-auths are missing. Export by settlement batch for a full check.` : '',
         grandOk: pdfFile ? pdfFile.grandOk : true,
-        tCount: counted.length, dCount: d.length, terms, termTot, termOrg, termName, sheet, wrong, matches, offsets, ex, dupRows, ignored: ignored[dept]
+        tCount: counted.length, dCount: d.length, terms, termTot, termOrg, termName, sheet, wrong, matches, offsets, ex, dupRows, ignored: ignored[dept],
+        // Charges taken on the other department's terminals and counted here, with the Opera posting they matched.
+        crossIn: matches.flatMap(m => m.t.filter(y => y.home !== dept).map(y => ({ t: y, d: m.d[0] }))).concat(ex.filter(e => e.row.side === 'T' && e.row.home !== dept).map(e => ({ t: e.row, d: null })))
       };
+      // Unexplained items the cross-department pass can try to pair (only charges on this department's own terminals).
+      left.T[dept] = ex.filter(e => (e.kind === 'terminal' || e.kind === 'double') && e.row.home === dept).map(e => e.row);
+      left.D[dept] = ex.filter(e => e.kind === 'opera' || e.kind === 'missing').map(e => e.row);
+    }
+    return { out, left };
+  }
+
+  // A department's terminal is sometimes used for the other department's guest (e.g. a room bill paid
+  // on an F&B terminal and posted in Opera FO). Pair "Not on terminal" Opera items with unexplained
+  // charges on the other department's terminals, count those charges where they were posted, and run again.
+  // Strict: same amount and same card last 4. Without a last 4 in Opera, the card type must match and it
+  // must be the only charge of that amount.
+  function reconcile(opts) {
+    const first = reconcileOnce(opts);
+    const moves = {};
+    if (opts.cross !== false) {
+      for (const [A, B] of [['FO', 'F&B'], ['F&B', 'FO']]) {
+        for (const x of first.left.D[A] || []) {
+          const same = (first.left.T[B] || []).filter(y => !moves[y.key] && cents(y.amt) === cents(x.amt) && cents(y.amt) !== 0);
+          let hit = x.l4 ? same.filter(y => y.l4 === x.l4) : (same.length === 1 && same[0].type === codeType(x.code) ? same : []);
+          if (!hit.length) continue;
+          hit.sort((a, b) => Math.abs(mins(a.time) - mins(x.time)) - Math.abs(mins(b.time) - mins(x.time)));
+          moves[hit[0].key] = A;
+        }
+      }
+    }
+    const out = Object.keys(moves).length ? reconcileOnce(opts, moves).out : first.out;
+    for (const dept of ['FO', 'F&B']) {
+      const r = out[dept]; if (!r || r.skip) continue;
+      const other = out[dept === 'FO' ? 'F&B' : 'FO'];
+      // Charges on this department's terminals that belong to the other department (shown for information).
+      r.crossOut = other && !other.skip ? other.crossIn.filter(c => c.t.home === dept) : [];
     }
     return out;
   }

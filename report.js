@@ -54,7 +54,7 @@ const Report = (() => {
       fig('Terminals', pm(r.tTot), x + 22); fig('Opera D140', pm(r.dTot), x + 22 + fw); fig('Variance', nil ? '0.00' : pm(r.variance), x + 22 + 2 * fw, vcol(r.variance));
       doc.setDrawColor(...LINE); doc.setLineWidth(0.8); doc.line(x + 22, top + 96, x + cw - 18, top + 96);
       const fix = r.ex.filter(e => e.kind !== 'dup' && e.kind !== 'missing').length;
-      const pts = [`${fix} item${fix === 1 ? '' : 's'} to fix`, `${r.wrong.length} posting${r.wrong.length === 1 ? '' : 's'} on the wrong card code`, `${r.matches.length} matched transactions`];
+      const pts = [`${fix} item${fix === 1 ? '' : 's'} to fix`, `${r.wrong.length} posting${r.wrong.length === 1 ? '' : 's'} on the wrong card code`, `${r.matches.length} matched transactions${(r.crossIn || []).length + (r.crossOut || []).length ? `, ${(r.crossIn || []).length + (r.crossOut || []).length} on the other department's terminal` : ''}`];
       if (r.checkable !== null) pts.push(`Checkable variance ${pm(r.checkable)} (export incomplete)`);
       doc.setFont('helvetica', 'normal'); doc.setFontSize(9.2); doc.setTextColor(...INK);
       pts.forEach((t, j) => { const py = top + 114 + j * 14; doc.setFillColor(...AMB); doc.circle(x + 26, py - 3, 2, 'F'); doc.text(clean(t), x + 34, py); });
@@ -92,6 +92,15 @@ const Report = (() => {
       y = h2(`To fix (${fixes.length})`, y) + 4;
       y = fixes.length ? exTable(fixes, y) : note('Nothing to fix. Every posting matches a terminal transaction.', y + 8);
       if (rest.length) { y = need(y + 20, 80); y = h2(`Cannot be checked with this export (${rest.length})`, y) + 4; y = exTable(rest, y); }
+      const xi = r.crossIn || [], xo = r.crossOut || [];
+      if (xi.length || xo.length) {
+        y = need(y + 20, 80); y = h2(`Used another department's terminal (${xi.length + xo.length})`, y) + 4;
+        y = note('Nothing to fix in Opera. Each charge is counted in the department where it was posted.', y + 8) - 2;
+        const dn = d => d === 'FO' ? 'Front Office' : 'F&B';
+        y = table({ startY: y, head: [['Charged on', 'Card', 'Amount', 'Counted in', 'D140', 'Guest / room']],
+          body: xi.concat(xo).map(c => [clean(`${c.t.tn}\n${c.t.org}  ${c.t.time}`), clean(`${c.t.type} ..${c.t.l4}`), pm(c.t.amt), dn(c.t.dept), c.d ? `Page ${c.d.page}${c.d.receipt ? '  #' + c.d.receipt : ''}` : '-', c.d ? clean(`${c.d.name}  Room ${c.d.room}`) : 'No posting matched']),
+          columnStyles: { 2: { halign: 'right', fontStyle: 'bold', textColor: SKY } } });
+      }
       y = need(y + 20, 80);
       y = h2(`Wrong card code (${r.wrong.length})`, y) + 4;
       y = r.wrong.length ? table({ startY: y, head: [['#', 'Guest', 'Room', 'Page', 'Receipt', 'Amount', 'Posted on', 'Card used', 'Terminal', 'Move to']],

@@ -148,6 +148,7 @@
       <div class="rule"></div>
       <div class="ln"><span>TO FIX</span><span>${fix}</span></div>
       <div class="ln"><span>CARD CODES</span><span>${r.wrong.length}</span></div>
+      ${(r.crossIn || []).length + (r.crossOut || []).length ? `<div class="ln"><span>OTHER DEPT TERM.</span><span>${r.crossIn.length + r.crossOut.length}</span></div>` : ''}
       <div class="ln"><span>MATCHED</span><span>${r.matches.length}</span></div>
       <div class="stampwrap"><div class="stamp ${vc(r.variance)}">${nil ? 'BALANCED' : 'OUT<small>' + esc(money(r.variance, true)) + '</small>'}</div></div>
       <div class="bar"></div>
@@ -191,7 +192,7 @@
     el.hidden = false;
     const fixes = r.ex.filter(e => e.kind !== 'dup' && e.kind !== 'missing');
     const tabs = [['fix', 'To fix', fixes.length, fixes.length ? 'alert' : ''], ['codes', 'Card codes', r.wrong.length, ''], ['sheet', 'Recon sheet', null, ''], ['matched', 'Matched', r.matches.length, '']];
-    if (!S.tab) S.tab = fixes.length ? 'fix' : r.wrong.length ? 'codes' : 'sheet';
+    if (!S.tab) S.tab = fixes.length || (r.crossIn || []).length || (r.crossOut || []).length ? 'fix' : r.wrong.length ? 'codes' : 'sheet';
     const types = sheetTypes(r).filter(ty => r.sheet[ty].tt || r.sheet[ty].op);
     const max = Math.max(1, ...types.map(ty => Math.max(Math.abs(r.sheet[ty].tt), Math.abs(r.sheet[ty].op))));
     const bars = types.map(ty => { const o = r.sheet[ty], v = o.tt - o.op;
@@ -205,6 +206,10 @@
       const rest = r.ex.filter(e => e.kind === 'dup' || e.kind === 'missing');
       body = fixes.length ? `<div class="fixes">${fixes.map(fixCard).join('')}</div>` : `<div class="nothing">${ic.party(40)}<b>Nothing to fix</b><span>Every posting matches a terminal transaction.</span></div>`;
       if (rest.length) body += `<h3 style="margin:22px 0 12px;font-size:15px">Can't be checked with this export (${rest.length})</h3><div class="fixes">${rest.map(fixCard).join('')}</div>`;
+      const xi = r.crossIn || [], xo = r.crossOut || [];
+      if (xi.length || xo.length) body += `<h3 style="margin:22px 0 4px;font-size:15px">Used another department's terminal (${xi.length + xo.length})</h3><p style="margin:0 0 12px;color:var(--muted);font-size:13px">Nothing to fix in Opera. Each charge is counted in the department where it was posted.</p><div class="list">${
+        xi.map(c => `<div class="lrow"><span class="g">${esc(c.d ? c.d.name + ' · Rm ' + c.d.room : 'No posting matched')}</span><span class="m room">Posted ${esc(S.sel)}</span><span class="m pg">${c.d ? 'p.' + esc(c.d.page) : ''}</span><span class="m rc">${c.d && c.d.receipt ? '#' + esc(c.d.receipt) : ''}</span><span class="amtc num">${money(c.t.amt)}</span><span class="move"><span class="chip to">${esc(c.t.tn)} · ${esc(c.t.org)}</span><span class="m">${esc(c.t.time)} · ${esc(c.t.type)} ••${esc(c.t.l4)}</span></span></div>`).join('') +
+        xo.map(c => `<div class="lrow"><span class="g">${esc(c.t.type)} ••${esc(c.t.l4)}${c.d ? ' · ' + esc(c.d.name) : ''}</span><span class="m room">Posted ${esc(c.d ? c.d.dept : '')}</span><span class="m pg">${c.d ? 'p.' + esc(c.d.page) : ''}</span><span class="m rc">${c.d && c.d.receipt ? '#' + esc(c.d.receipt) : ''}</span><span class="amtc num">${money(c.t.amt)}</span><span class="move"><span class="chip to">${esc(c.t.tn)} · ${esc(c.t.org)}</span><span class="m">${esc(c.t.time)}</span></span></div>`).join('')}</div>`;
       if (r.offsets.length) body += `<h3 style="margin:22px 0 12px;font-size:15px">Cancel out, no effect (${r.offsets.length})</h3><div class="list">${r.offsets.map(o => `<div class="lrow"><span class="g">${esc(o.side === 'Opera' ? o.a.name + ' · Rm ' + o.a.room : o.a.type + ' ••' + o.a.l4)}</span><span class="m room">${esc(o.side)}</span><span class="m pg">${o.side === 'Opera' ? 'p.' + esc(o.a.page) : ''}</span><span class="m rc">${esc(o.a.time)} / ${esc(o.b.time)}</span><span class="amtc num">${money(o.a.amt)}</span><span class="move"><span class="chip to">+${plain(o.a.amt)}</span><span class="chip from" style="text-decoration:none">${plain(o.b.amt)}</span></span></div>`).join('')}</div>`;
     } else if (S.tab === 'codes') {
       body = r.wrong.length ? `<div class="lhead"><span>Guest</span><span>Room</span><span>Page</span><span>Receipt</span><span>Amount</span><span>Move code</span></div><div class="list">${r.wrong.map(w => `<div class="lrow"><span class="g">${esc(w.x.name)}</span><span class="m room">${esc(w.x.room)}</span><span class="m pg">p.${esc(w.x.page)}</span><span class="m rc">${w.x.receipt ? '#' + esc(w.x.receipt) : esc(w.x.ref.slice(-8))}</span><span class="amtc num">${money(w.x.amt)}</span><span class="move"><span class="chip from">${esc(w.x.code)} ${esc(w.from)}</span>${ic.arrow(16)}<span class="chip to">${esc(w.toCode)} ${esc(w.to)}</span><span class="m">••${esc(w.y.l4)} · ${esc(w.y.tn)} ${esc(w.y.time)}</span></span></div>`).join('')}</div>`
@@ -243,6 +248,9 @@
     const b = [];
     for (const d of ['FO', 'F&B']) { const p = S.pdf[d]; if (p && !p.grandOk) b.push(`<div class="banner bad">${ic.alert(18)}<span>${deptName(d)} D140: postings add to ${money(p.total)} but the Grand Total says ${money(p.grand)}. Some lines may not have been read.</span></div>`); }
     const r = S.res && S.res[S.sel]; if (r && r.warn) b.push(`<div class="banner">${ic.alert(18)}<span>${esc(r.warn)}</span></div>`);
+    if (r && !r.skip) { const oth = deptName(S.sel === 'FO' ? 'F&B' : 'FO'), me = deptName(S.sel), sum = l => l.reduce((a, c) => a + c.t.amt, 0);
+      if (r.crossIn.length) b.push(`<div class="banner info">${ic.pos(18)}<span>${me} includes ${money(sum(r.crossIn))} (${r.crossIn.length}) charged on ${oth} terminals and posted in ${me} Opera. It is counted here, so it is not a difference. See the To fix tab.</span></div>`);
+      if (r.crossOut.length) b.push(`<div class="banner info">${ic.pos(18)}<span>${money(sum(r.crossOut))} (${r.crossOut.length}) charged on ${me} terminals belongs to ${oth} and is counted there. ${me} terminal totals here are lower than the terminal report by this amount.</span></div>`); }
     $('#banners').innerHTML = b.join('');
     $('#banners').style.display = b.length ? 'grid' : 'none'; $('#banners').style.gap = '10px';
     const any = S.res && (S.res.FO || S.res['F&B']); const rr = any && !any.skip ? any : null;
@@ -272,6 +280,7 @@
     openDrawer('Settings', `
       <div class="field"><span>Count terminals by</span><div class="seg" id="o-basis"><button data-v="batch" class="${S.opts.basis === 'batch' ? 'on' : ''}">Settlement batch</button><button data-v="date" class="${S.opts.basis === 'date' ? 'on' : ''}">Transaction date</button></div></div>
       <div class="field"><label for="o-batch">Batch</label><select id="o-batch"><option value="auto">Day after the D140 date</option>${Object.keys(bs).sort().map(b => `<option value="${esc(b)}" ${S.opts.batch === b ? 'selected' : ''}>${esc(b)} · ${bs[b]} rows</option>`).join('')}</select></div>
+      <label class="switch"><input type="checkbox" id="o-cross" ${S.opts.cross !== false ? 'checked' : ''}>Match charges taken on the other department's terminal</label>
       <label class="switch"><input type="checkbox" id="o-dup" ${S.opts.dupOnce ? 'checked' : ''}>Count a completion shown twice only once</label>
       ${ms.length ? `<div class="field"><span>Merchants</span>${ms.map((m, i) => `<div class="mrow"><div><div class="n">${esc(m.name)}</div><div class="s">${esc(m.id)} · ${esc(m.terms.join(', '))}</div></div><select data-k="${esc(m.key)}" id="m-${i}"><option ${m.dept === 'FO' ? 'selected' : ''}>FO</option><option value="F&B" ${m.dept === 'F&B' ? 'selected' : ''}>F&amp;B</option><option ${m.dept === 'Ignore' ? 'selected' : ''}>Ignore</option></select></div>`).join('')}</div>` : ''}
       ${termSection()}
@@ -280,6 +289,7 @@
     B.querySelectorAll('#o-basis button').forEach(b => b.addEventListener('click', () => { S.opts.basis = b.dataset.v; B.querySelectorAll('#o-basis button').forEach(x => x.classList.toggle('on', x === b)); save(); }));
     $('#o-batch').value = S.opts.batch in bs ? S.opts.batch : 'auto';
     $('#o-batch').addEventListener('change', e => { S.opts.batch = e.target.value; save(); });
+    $('#o-cross').addEventListener('change', e => { S.opts.cross = e.target.checked; save(); });
     $('#o-dup').addEventListener('change', e => { S.opts.dupOnce = e.target.checked; save(); });
     B.querySelectorAll('select[data-k]').forEach(s => s.addEventListener('change', () => { S.merch[s.dataset.k] = s.value; store.set('cr-merch', S.merch); run(); }));
     wireTerms(B);
