@@ -39,7 +39,7 @@
 
   /* ---------- state ---------- */
   const S = { csv: [], pdf: { FO: null, 'F&B': null }, err: {}, res: null, sel: 'FO', tab: null, busy: {},
-    opts: store.get('cr-opts', { basis: 'batch', batch: 'auto', dupOnce: true }), merch: store.get("cr-merch", {}), names: store.get("cr-terms", []), cashiers: store.get("cr-cashiers", {}) };
+    opts: store.get('cr-opts', { basis: 'batch', batch: 'auto', dupOnce: true }), merch: store.get("cr-merch", {}), names: Engine.withBuiltIn(store.get("cr-terms", [])), cashiers: store.get("cr-cashiers", {}) };
 
   function toast(t) { const d = document.createElement('div'); d.className = 'toast'; d.textContent = t; document.body.appendChild(d); setTimeout(() => d.remove(), 2400); }
 
@@ -53,7 +53,7 @@
     const keep = id => S.names.find(n => n.custom && dgt(n.id) === dgt(id));
     // The sheet covers FO, so F&B names typed in Settings stay.
     const others = S.names.filter(n => n.custom && n.dept !== "FO" && !add.some(a => dgt(a.id) === dgt(n.id)));
-    S.names = add.map(a => keep(a.id) || a).concat(others);
+    S.names = Engine.withBuiltIn(add.map(a => keep(a.id) || a).concat(others));
     store.set("cr-terms", S.names); toast(`${add.length} terminal names loaded`); return add.length;
   }
 
@@ -477,7 +477,7 @@
       el.querySelector(".tdept").addEventListener("change", e => { const n = entry(el); n.dept = e.target.value; n.custom = true; save(); });
     });
     const f = B.querySelector("#o-tfile"); if (f) f.addEventListener("change", async () => { if (f.files[0] && importNames(await f.files[0].text())) { run(); openSettings(); } });
-    const c = B.querySelector("#o-tclear"); if (c) c.addEventListener("click", () => { if (!confirm("Remove all saved terminal names on this device?")) return; S.names = []; save(); openSettings(); });
+    const c = B.querySelector("#o-tclear"); if (c) c.addEventListener("click", () => { if (!confirm("Remove the names you changed on this device? The built-in names stay.")) return; S.names = Engine.withBuiltIn([]); save(); openSettings(); });
   }
 
   /* ---------- drawer ---------- */

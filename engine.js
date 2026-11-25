@@ -141,6 +141,11 @@ const Engine = (() => {
     for (const n of out) if (c[n.name] > 1) n.name += " ·" + dg(n.id).slice(-4);
     return out;
   }
+  // No terminal names are built into the public code. Import your terminal list in Settings on each device.
+  // A name saved in Settings for the same terminal wins over these.
+  const BUILT_IN = [
+  ].map(([name, id, dept]) => ({ id, name, dept, builtIn: true }));
+  const withBuiltIn = (names = []) => names.concat(BUILT_IN.filter(b => !names.some(n => dg(n.id) === b.id)));
   function termLookup(names = []) {
     const list = names.filter(n => dg(n.id)).map(n => ({ ...n, d: dg(n.id) })), cache = {};
     return r => {
@@ -364,5 +369,5 @@ const Engine = (() => {
     return out;
   }
 
-  return { isTermSheet, parseTermSheet, terminals, num, cents, parseCSV, pdfLines, parseD140, reconcile, merchants, batches, termRows, TYPES, codeType, codeFor, cardType };
+  return { withBuiltIn, isTermSheet, parseTermSheet, terminals, num, cents, parseCSV, pdfLines, parseD140, reconcile, merchants, batches, termRows, TYPES, codeType, codeFor, cardType };
 })();
