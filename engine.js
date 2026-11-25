@@ -169,7 +169,8 @@ const Engine = (() => {
   // moves: { rowKey: dept } — terminal charges counted in another department (see reconcile below).
   function reconcileOnce({ csvFiles, pdfFiles, merch = {}, names = [], cashiers = {}, basis = 'batch', batch = 'auto', dupOnce = true }, moves = {}) {
     // Who posted it: the cashier's name from Settings, else "cashier 479".
-    const by = r => r.cashier ? (cashiers[r.cashier] || 'cashier ' + r.cashier) : '';
+    // F&B lines come in through the Micros interface (Cash ID 100, user OPERA-IFC), not a person.
+    const by = r => !r.cashier ? '' : cashiers[r.cashier] || (/^OPERA/i.test(r.user || '') || String(r.code).startsWith('917') && r.cashier === '100' ? 'the Micros interface' : 'cashier ' + r.cashier);
     const all = termRows(csvFiles); learnFO(all); const look = termLookup(names);
     // Only card payment codes are checked against terminals. Bank transfers (xxx11) are left out quietly;
     // any other non-card code is left out and listed.
