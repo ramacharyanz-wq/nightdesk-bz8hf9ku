@@ -272,7 +272,7 @@
         const tp = await doc.getPage(k); if (at !== dv.i || !b.isConnected) return; const tv = tp.getViewport({ scale: tz * dpr });
         c.width = Math.round(tv.width); c.height = Math.round(tv.height); c.style.width = s2.w * tz + 'px'; c.style.height = s2.h * tz + 'px';
         await tp.render({ canvasContext: c.getContext('2d'), viewport: tv }).promise;
-        const g = c.getContext('2d'); g.fillStyle = 'rgba(255,225,0,.6)'; g.globalCompositeOperation = 'multiply';
+        const g = c.getContext('2d'); g.fillStyle = 'rgba(255,200,97,.75)'; g.globalCompositeOperation = 'multiply';
         for (const x of D) if (x.page === k && x.box) g.fillRect(0, (s2.h - x.box.y1) * tz * dpr, c.width, Math.max(3 * dpr, (x.box.y1 - x.box.y0) * tz * dpr)); }
     } catch (err) { const v = dv.el.querySelector('.pv-view'); if (v) v.innerHTML = '<div class="dv-none" style="margin:12px">Could not show this page.</div>'; }
   }
