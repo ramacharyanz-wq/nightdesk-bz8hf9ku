@@ -19,9 +19,9 @@ const Report = (() => {
   function build(res, meta = {}) {
     const { jsPDF } = window.jspdf; const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
     const W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight(), M = 36;
-    const NAVY = [18, 29, 51], INK = [20, 32, 58], MUTE = [90, 104, 134], AMB = [255, 200, 97], SKY = [61, 99, 216], LINE = [217, 224, 238], SOFT = [244, 246, 251], RED = [210, 59, 59], GRN = [17, 144, 90], REDS = [252, 232, 232], GRNS = [226, 244, 235], ORG = [184, 98, 0];
+    const NAVY = [18, 29, 51], INK = [20, 32, 58], MUTE = [90, 104, 134], AMB = [255, 200, 97], SKY = [61, 99, 216], LINE = [217, 224, 238], SOFT = [244, 246, 251], RED = [210, 59, 59], GRN = [17, 144, 90], REDS = [252, 232, 232], GRNS = [226, 244, 235], ORG = [204, 74, 0];
     // Variance colour: terminals more than Opera = orange, less = red, nil = green
-    const OVR = [212, 107, 8], OVRS = [253, 236, 220];
+    const OVR = [204, 74, 0], OVRS = [255, 231, 217];
     const vcol = v => cents(v) === 0 ? GRN : v > 0 ? OVR : RED, vsoft = v => cents(v) === 0 ? GRNS : v > 0 ? OVRS : REDS;
     const depts = Object.entries(res).filter(([, r]) => !r.skip);
     const bd = depts[0]?.[1].bd;
@@ -73,7 +73,7 @@ const Report = (() => {
       doc.setFont('helvetica', 'normal'); doc.setFontSize(9.5); doc.setTextColor(...MUTE);
       doc.text(clean(`Terminals ${pm(r.tTot)}    Opera D140 ${pm(r.dTot)}    Variance ${cents(r.variance) === 0 ? 'NIL' : pm(r.variance)}`), M, y + 16);
       y += 38;
-      if (r.warn) { doc.setFontSize(8.5); const ls = doc.splitTextToSize(clean(r.warn), W - 2 * M - 24); const bh = ls.length * 11 + 14; doc.setFillColor(253, 241, 226); doc.roundedRect(M, y - 10, W - 2 * M, bh, 4, 4, 'F'); doc.setTextColor(...ORG); doc.text(ls, M + 12, y + 2); y += bh + 14; }
+      if (r.warn) { doc.setFontSize(8.5); const ls = doc.splitTextToSize(clean(r.warn), W - 2 * M - 24); const bh = ls.length * 11 + 14; doc.setFillColor(255, 236, 224); doc.roundedRect(M, y - 10, W - 2 * M, bh, 4, 4, 'F'); doc.setTextColor(...ORG); doc.text(ls, M + 12, y + 2); y += bh + 14; }
       y = h2('Recon sheet', y) + 4;
       const types = Object.keys(r.sheet).filter(ty => ['EFTPOS', 'MC', 'VISA', 'Union Pay', 'Amex', 'AliPay & WeChat', 'JCB'].includes(ty) || r.sheet[ty].tt || r.sheet[ty].op);
       const body = types.map(ty => { const o = r.sheet[ty]; return [ty, Engine.codeFor(dept, ty), ...r.terms.map(t => pn(o.t[t] || 0)), pn0(o.tt), pn0(o.op), pn0(o.tt - o.op)]; });
