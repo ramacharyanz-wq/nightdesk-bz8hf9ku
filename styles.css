@@ -378,3 +378,8 @@ table.sheet tr.tot td:first-child{background:var(--panel-2)}
 .term .id svg{margin-top:2px}
 .drawer .seg{display:flex}
 .drawer .seg button{flex:1;justify-content:center}
+
+/* Phone top edge (26 Nov 2026): app draws under the status bar; hidden date chip must not leave an empty bar */
+[hidden]{display:none!important}
+.shell{padding-top:calc(env(safe-area-inset-top) + 14px)}
+@media (max-width:520px){.shell{padding-top:calc(env(safe-area-inset-top) + 8px)}}
