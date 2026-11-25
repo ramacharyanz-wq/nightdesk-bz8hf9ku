@@ -276,3 +276,7 @@ td.v-under,.fix small.v-under{color:var(--under);font-weight:800}
 
 /* Info banner (charges on another department's terminal) */
 .banner.info{background:var(--sky-soft);color:var(--sky)}
+
+/* Uploaded file name in the upload boxes */
+.slot .s.file{color:var(--text);font-weight:600}
+.slot .s.file[hidden]{display:none}

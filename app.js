@@ -96,20 +96,24 @@
   window.addEventListener('drop', e => { e.preventDefault(); hideDrop(); addFiles([...e.dataTransfer.files]); });
 
   function renderSlots() {
-    const set = (id, { filled, err, busy, sub, icon }) => {
+    const set = (id, { filled, err, busy, sub, icon, file }) => {
       const el = $(id); el.classList.toggle('filled', !!filled); el.classList.toggle('err', !!err);
       el.querySelector('.ico').innerHTML = busy ? '<span class="busy"></span>' : err ? ic.alert(22) : filled ? ic.check(22) : icon;
-      el.querySelector('.s').textContent = sub;
+      // File name on its own line, in the same style as the line below it.
+      let fl = el.querySelector('.s.file');
+      if (file && !fl) { fl = document.createElement('span'); fl.className = 's file'; el.querySelector('.t').after(fl); }
+      if (fl) { fl.hidden = !file; fl.textContent = file || ''; fl.title = file || ''; }
+      el.querySelector('.s:not(.file)').textContent = sub;
       let x = el.querySelector('.x');
       if (filled && !x) { x = document.createElement('button'); x.className = 'x'; x.type = 'button'; x.setAttribute('aria-label', 'Remove'); x.innerHTML = ic.x(16); el.appendChild(x);
         x.addEventListener('click', ev => { ev.preventDefault(); ev.stopPropagation(); if (id === '#slot-csv') S.csv = []; else S.pdf[id === '#slot-FO' ? 'FO' : 'F&B'] = null; run(); }); }
       if (!filled && x) x.remove();
     };
     const rows = S.csv.reduce((a, f) => a + f.rows.length, 0);
-    set('#slot-csv', { filled: S.csv.length, err: S.err.csv, busy: S.busy.csv, icon: ic.grid(22), sub: S.err.csv || (S.csv.length ? `${S.csv.map(f => f.name).join(', ')} · ${rows} rows` : 'CSV') });
+    set('#slot-csv', { filled: S.csv.length, err: S.err.csv, busy: S.busy.csv, icon: ic.grid(22), file: !S.err.csv && S.csv.length ? S.csv.map(f => f.name).join(', ') : '', sub: S.err.csv || (S.csv.length ? `${rows} row${rows === 1 ? "" : "s"}` : "CSV") });
     for (const [d, id] of [['FO', '#slot-FO'], ['F&B', '#slot-FB']]) {
       const p = S.pdf[d];
-      set(id, { filled: p, err: S.err[d] || (p && !p.grandOk), busy: S.busy[d], icon: ic.doc(22),
+      set(id, { filled: p, err: S.err[d] || (p && !p.grandOk), busy: S.busy[d], icon: ic.doc(22), file: !S.err[d] && p ? p.name : '',
         sub: S.err[d] || (p ? `${p.rows.length} postings · ${money(p.total)}${p.grandOk ? '' : ' · Grand Total differs'}` : 'PDF') });
     }
   }
