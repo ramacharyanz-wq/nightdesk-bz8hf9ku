@@ -234,7 +234,7 @@
         : `<div class="nothing">${ic.party(40)}<b>All on the right card code</b></div>`;
     } else if (S.tab === 'sheet') {
       const st = sheetTypes(r);
-      body = `<div class="tablewrap"><table><thead><tr><th>Card type</th><th>Code</th>${r.terms.map(t => `<th class="r">${esc(tname(r, t))}</th>`).join('')}<th class="r">Terminals</th><th class="r">Opera</th><th class="r">Variance</th></tr></thead><tbody>
+      body = `<div class="tablewrap"><table class="sheet"><thead><tr><th>Card type</th><th>Code</th>${r.terms.map(t => `<th class="r">${esc(tname(r, t))}</th>`).join('')}<th class="r">Terminals</th><th class="r">Opera</th><th class="r">Variance</th></tr></thead><tbody>
         ${st.map(ty => { const o = r.sheet[ty], v = o.tt - o.op; return `<tr><td><b>${esc(ty)}</b></td><td>${esc(Engine.codeFor(r.dept, ty))}</td>${r.terms.map(t => `<td class="r">${o.t[t] ? plain(o.t[t]) : ''}</td>`).join('')}<td class="r"><b>${plain(o.tt)}</b></td><td class="r">${plain(o.op)}</td><td class="r ${cents(v) ? "v-" + vc(v) : ""}">${plain(v)}</td></tr>`; }).join('')}
         <tr class="tot"><td>Total</td><td></td>${r.terms.map(t => `<td class="r">${plain(r.termTot[t] || 0)}</td>`).join('')}<td class="r">${plain(r.tTot)}</td><td class="r">${plain(r.dTot)}</td><td class="r ${cents(r.variance) ? "v-" + vc(r.variance) : "pos"}">${plain(r.variance)}</td></tr></tbody></table></div>`;
     } else {
@@ -245,9 +245,10 @@
       <button class="btn" id="b-copy">${ic.copy(18)}Copy sheet</button><button class="btn primary" id="b-pdf">${ic.down(18)}PDF report</button></div>
       <div class="grid2"><div class="panel"><h3>By card type<span class="legend"><span><i style="background:var(--amber)"></i>Terminals</span><span><i style="background:var(--sky)"></i>Opera</span></span></h3><div class="bars">${bars}</div></div>
       <div class="panel"><h3>Terminals</h3><div class="terms">${terms}</div></div></div>
-      <div><div class="tabs" role="tablist">${tabs.map(([k, l, n, c]) => `<button class="${S.tab === k ? 'on' : ''}" data-t="${k}" role="tab">${l}${n !== null ? `<span class="count ${c}">${n}</span>` : ''}</button>`).join('')}</div><div style="padding-top:18px">${body}</div></div>`;
+      <div><div class="tabs" role="tablist">${tabs.map(([k, l, n, c]) => `<button class="${S.tab === k ? 'on' : ''}" data-t="${k}" role="tab" aria-selected="${S.tab === k}">${l}${n !== null ? `<span class="count ${c}">${n}</span>` : ''}</button>`).join('')}</div><div style="padding-top:18px">${body}</div></div>`;
     el.querySelectorAll('.seg button').forEach(b => b.addEventListener('click', () => { S.sel = b.dataset.d; S.tab = null; renderReceipts(false); renderDetail(); }));
-    el.querySelectorAll('.tabs button').forEach(b => b.addEventListener('click', () => { S.tab = b.dataset.t; renderDetail(); }));
+    el.querySelectorAll('.tabs button').forEach(b => b.addEventListener('click', () => { S.tab = b.dataset.t; const x = el.querySelector('.tabs').scrollLeft; renderDetail(); const t = $('#detail .tabs'); if (t) t.scrollLeft = x; }));
+    { const t = el.querySelector('.tabs'), on = t && t.querySelector('.on'); if (t && on && t.scrollWidth > t.clientWidth) { const l = on.offsetLeft - 18, r = on.offsetLeft + on.offsetWidth - t.clientWidth + 18; if (t.scrollLeft > l) t.scrollLeft = l; else if (t.scrollLeft < r) t.scrollLeft = r; } }
     $('#b-copy').addEventListener('click', () => copy(sheetTSV(r)));
     $('#b-pdf').addEventListener('click', downloadPdf);
   }
@@ -367,8 +368,37 @@
   }
 
   /* ---------- drawer ---------- */
-  function openDrawer(title, html) { $('#drawer-title').textContent = title; $('#drawer-body').innerHTML = html; $('#drawer').classList.add('open'); $('#drawer').setAttribute('aria-hidden', 'false'); $('#scrim').classList.add('open'); }
-  function closeDrawer() { $('#drawer').classList.remove('open'); $('#drawer').setAttribute('aria-hidden', 'true'); $('#scrim').classList.remove('open'); }
+  // Side panel: locks the page behind it, takes focus, closes with Esc, the scrim, the X or a swipe to the right.
+  let lastFocus = null, lockY = 0;
+  // Pin the page in place behind the panel (works on iPhone, where overflow:hidden alone does not).
+  const lockPage = on => { const b = document.body; if (on) { lockY = scrollY; Object.assign(b.style, { position: 'fixed', top: -lockY + 'px', left: '0', right: '0', width: '100%' }); } else { Object.assign(b.style, { position: '', top: '', left: '', right: '', width: '' }); scrollTo({ top: lockY, behavior: 'instant' }); } };
+  function openDrawer(title, html) {
+    const d = $('#drawer'), wasOpen = d.classList.contains('open');
+    $('#drawer-title').textContent = title; $('#drawer-body').innerHTML = html;
+    if (wasOpen) return;
+    lastFocus = document.activeElement; d.classList.add('open'); d.removeAttribute('inert'); d.setAttribute('aria-hidden', 'false');
+    $('#scrim').classList.add('open'); lockPage(true); $('#drawer-body').scrollTop = 0;
+    setTimeout(() => $('#drawer-close').focus({ preventScroll: true }), 60);
+  }
+  function closeDrawer() {
+    const d = $('#drawer'); if (!d.classList.contains('open')) return;
+    d.classList.remove('open'); d.setAttribute('inert', ''); d.setAttribute('aria-hidden', 'true'); d.style.transform = '';
+    $('#scrim').classList.remove('open'); lockPage(false);
+    if (lastFocus && lastFocus.focus) lastFocus.focus({ preventScroll: true });
+  }
+  (() => { // swipe right to close
+    const d = $('#drawer'); let x0 = null, y0 = 0, dx = 0, horiz = null;
+    d.addEventListener('touchstart', e => { if (e.touches.length !== 1) return; x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; dx = 0; horiz = null; }, { passive: true });
+    d.addEventListener('touchmove', e => {
+      if (x0 === null) return; const t = e.touches[0]; dx = t.clientX - x0; const dy = t.clientY - y0;
+      if (horiz === null && (Math.abs(dx) > 8 || Math.abs(dy) > 8)) horiz = Math.abs(dx) > Math.abs(dy) * 1.2;
+      if (horiz && dx > 0) { d.style.transition = 'none'; d.style.transform = `translateX(${dx}px)`; }
+    }, { passive: true });
+    d.addEventListener('touchend', () => {
+      if (x0 === null) return; d.style.transition = ''; d.style.transform = '';
+      if (horiz && dx > Math.min(110, d.offsetWidth * 0.28)) closeDrawer(); x0 = null;
+    });
+  })();
   $('#scrim').addEventListener('click', closeDrawer); $('#drawer-close').addEventListener('click', closeDrawer);
   document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDrawer(); });
   $('#btn-history').addEventListener('click', openHistory);

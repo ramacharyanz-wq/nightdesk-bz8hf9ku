@@ -284,3 +284,97 @@ td.v-under,.fix small.v-under{color:var(--under);font-weight:800}
 /* Matches that balance only on amount */
 .b-check{background:var(--warn-soft);color:var(--warn)}
 .fix.k-check{border-left:3px solid var(--warn)}
+
+/* ===== Touch, sizing and responsive polish (audit 25 Nov 2026) ===== */
+html{-webkit-text-size-adjust:100%;touch-action:manipulation}
+@media (prefers-reduced-motion:no-preference){html{scroll-behavior:smooth}}
+button,a,label,summary,select,input,[role=button],.receipt{-webkit-tap-highlight-color:transparent;touch-action:manipulation}
+.shell{padding-top:max(18px,env(safe-area-inset-top));padding-bottom:calc(64px + env(safe-area-inset-bottom))}
+
+/* Finger-sized controls (44px minimum) */
+.icon-btn{width:44px;height:44px}
+.slot .x{width:44px;height:44px;margin:-8px -10px -8px auto;border-radius:12px}
+.btn{min-height:44px;justify-content:center}
+.seg button{min-height:44px}
+.tabs button{min-height:46px;white-space:nowrap}
+.hrow{grid-template-columns:minmax(0,1fr) auto auto 44px}
+.hrow button{width:44px;height:44px;border-radius:12px}
+.switch{min-height:44px}
+details>summary{min-height:44px;display:flex;align-items:center;list-style-position:inside}
+
+/* Inputs: 16px text so phones don't zoom in, and a full-height box */
+select,.trow input{min-height:44px;font-size:16px}
+.trow input{padding:9px 12px}
+.trow input::placeholder{color:var(--faint)}
+
+/* Panel */
+.drawer{padding-right:env(safe-area-inset-right);will-change:transform}
+.drawer header{padding:12px 14px 12px 20px;gap:10px}
+.drawer .body{padding:20px 20px calc(28px + env(safe-area-inset-bottom));overscroll-behavior:contain;-webkit-overflow-scrolling:touch;flex:1}
+.scrim{touch-action:none}
+
+/* Small text: nothing below 12px */
+.brow .lbl small{font-size:12px}
+
+/* Pressed feedback on every control */
+.btn,.icon-btn,.seg button,.tabs button,.hrow button,.slot .x,.slot{transition:transform .08s ease,background .15s,border-color .15s,color .15s}
+.btn:active,.icon-btn:active,.seg button:active,.tabs button:active,.hrow button:active,.slot .x:active{transform:scale(.96)}
+.slot:active{transform:scale(.99)}
+.receipt:active{transform:translateY(3px)}
+
+/* Hover effects only where there is a mouse (no stuck hover on touch) */
+@media (hover:none){
+  .receipt:hover{transform:none}
+  .slot:hover{border-color:var(--line-2);background:var(--panel)}
+  .slot.filled:hover{border-color:var(--line)}
+  .slot.err:hover{border-color:var(--bad)}
+  .icon-btn:hover,.btn:hover{border-color:var(--line)}
+}
+
+/* Recon sheet: card type column stays put while the table scrolls sideways */
+.tablewrap{-webkit-overflow-scrolling:touch;overscroll-behavior-x:contain}
+table.sheet th:first-child,table.sheet td:first-child{position:sticky;left:0;z-index:1;background:var(--panel);box-shadow:1px 0 0 var(--line)}
+table.sheet th:first-child{background:var(--panel-2)}
+table.sheet tr.tot td:first-child{background:var(--panel-2)}
+
+.toast{max-width:calc(100% - 32px);text-align:center}
+
+@media (max-width:900px){
+  /* Lists: keep room / page / receipt visible as a small detail line instead of hiding them */
+  .lrow{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 10px}
+  .lrow .g{order:1;flex:1 1 0;min-width:0;white-space:normal;overflow-wrap:anywhere}
+  .lrow .amtc{order:2;margin-left:auto;text-align:right;font-weight:800;white-space:nowrap}
+  .lrow .m,.lrow .room,.lrow .pg,.lrow .rc{order:3;display:inline;font-size:12.5px}
+  .lrow .m:empty{display:none}
+  .lrow .move{order:4;flex-basis:100%}
+}
+@media (max-width:640px){
+  /* Tabs: one swipeable row, edge to edge */
+  .tabs{flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;margin:0 -18px;padding:0 18px;scroll-padding:0 18px;scroll-snap-type:x proximity}
+  .tabs::-webkit-scrollbar{display:none}
+  .tabs button{flex:none;scroll-snap-align:start}
+  /* Action buttons share the row */
+  .dbar .spacer{display:none}
+  .dbar .seg{flex:1 1 100%}
+  .dbar .seg button{flex:1;justify-content:center}
+  .dbar .btn{flex:1 1 0}
+}
+@media (max-width:520px){
+  .shell{padding-left:max(14px,env(safe-area-inset-left));padding-right:max(14px,env(safe-area-inset-right))}
+  .tabs{margin:0 -14px;padding:0 14px;scroll-padding:0 14px}
+  .brand b{font-size:18px}
+  .top{gap:10px}
+}
+.slot .x{flex:none}
+.chip{white-space:normal;overflow-wrap:anywhere;max-width:100%}
+/* The page column never grows wider than the screen, whatever is inside it */
+.shell{grid-template-columns:minmax(0,1fr)}
+.shell>*{min-width:0}
+.detail{grid-template-columns:minmax(0,1fr)}
+.detail>*,.detail>div>*{min-width:0}
+/* Icons never shrink next to long text */
+.term .id svg,.loc svg,.banner svg,.btn svg,.seg button svg{flex:none}
+.term .id{align-items:flex-start}
+.term .id svg{margin-top:2px}
+.drawer .seg{display:flex}
+.drawer .seg button{flex:1;justify-content:center}
