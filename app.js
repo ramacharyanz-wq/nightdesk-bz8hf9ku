@@ -321,8 +321,10 @@
     const bars = types.map(ty => { const o = r.sheet[ty], v = o.tt - o.op;
       return `<div class="brow"><div class="lbl">${esc(ty)}<small>${esc(Engine.codeFor(r.dept, ty))}</small></div><div class="tracks"><div class="track"><i class="t" style="width:${Math.abs(o.tt) / max * 100}%"></i></div><div class="track"><i class="o" style="width:${Math.abs(o.op) / max * 100}%"></i></div></div>
       <div class="vals num"><b>${plain(o.tt)}</b><br>${plain(o.op)}${cents(v) ? `<br><span class="pill ${vc(v)}">${money(v, true)}</span>` : ''}</div></div>`; }).join('');
-    const tmax = Math.max(1, ...r.terms.map(t => Math.abs(r.termTot[t] || 0)));
-    const terms = r.terms.map(t => `<div class="term"><div class="id">${ic.pos(16)}${esc(tname(r, t))}</div><div class="org">${esc(r.termOrg[t])} · ${esc(t)}</div><div class="amt num">${money(r.termTot[t] || 0)}</div><div class="share"><i style="width:${Math.abs(r.termTot[t] || 0) / tmax * 100}%"></i></div></div>`).join('');
+    // Variance that sits on a terminal (charges there with no Opera posting, double charges, tips not posted).
+    const tVar = {}; for (const e of r.ex) if (e.row.side === 'T' && e.kind !== 'missing') tVar[e.row.term] = (tVar[e.row.term] || 0) + e.effect;
+    const terms = r.terms.map(t => { const v = tVar[t] || 0, n = r.ex.filter(e => e.row.side === 'T' && e.kind !== 'missing' && e.row.term === t).length;
+      return `<div class="term${cents(v) ? ' has-var' : ''}"><div class="id">${ic.pos(16)}${esc(tname(r, t))}</div><div class="org">${esc(r.termOrg[t])} · ${esc(t)}</div><div class="amt num">${money(r.termTot[t] || 0)}</div>${cents(v) ? `<div class="tvar ${vc(v)}" title="${n} difference${n === 1 ? '' : 's'} on this terminal">${ic.alert(15)}<span>${money(v, true)}</span><small>${n}<span class="w"> to fix</span></small></div>` : ''}</div>`; }).join('');
 
     let body = '';
     if (S.tab === 'fix') {

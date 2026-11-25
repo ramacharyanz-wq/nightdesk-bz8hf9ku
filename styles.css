@@ -450,3 +450,12 @@ table.sheet tr.tot td:first-child{background:var(--panel-2)}
 .btn.sm{min-height:40px}
 .dv-head .badge{display:inline-flex;align-items:center;padding:6px 12px;border-radius:999px;font-size:14px;font-weight:700}
 .dv-head small{color:var(--muted)}.dv-head small.v-over{color:var(--over)}.dv-head small.v-under{color:var(--under)}
+/* Terminal tile: small variance flag instead of the share bar (26 Nov 2026) */
+.term .tvar{justify-self:start;display:inline-flex;align-items:center;gap:6px;padding:4px 10px 4px 8px;border-radius:999px;font-size:13px;font-weight:800;font-variant-numeric:tabular-nums}
+.term .tvar small{font-weight:600;font-size:12px;opacity:.85}
+.term .tvar.over{background:var(--over-soft);color:var(--over)}.term .tvar.under{background:var(--under-soft);color:var(--under)}
+.term.has-var{box-shadow:inset 0 0 0 1px var(--line-2)}
+.term{align-content:start}
+.term .tvar{white-space:nowrap;max-width:100%}
+.term .tvar small::before{content:"· ";opacity:.7}
+@media (max-width:520px){.term .tvar .w{display:none}}
