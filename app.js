@@ -264,15 +264,15 @@
       if (at !== dv.i || !box.isConnected) return;
       const mk = (b, cls) => { const d = document.createElement('i'); d.className = cls; Object.assign(d.style, { left: b.x0 * z + 'px', top: (sz.h - b.y1) * z + 'px', width: (b.x1 - b.x0) * z + 'px', height: (b.y1 - b.y0) * z + 'px' }); box.appendChild(d); return d; };
       let first = null;
-      for (const x of D) if (x.page === dv.page && x.box) { const r = mk(x.box, `pv-hl t-${tone}`); first = first || r; if (x.box.a) first.amtEl = first.amtEl || mk(x.box.a, `pv-amt t-${tone}`); }
-      if (!dv.full && first) { const a = first.amtEl || first; view.scrollTop = first.offsetTop - view.clientHeight / 2 + first.offsetHeight / 2; view.scrollLeft = a.offsetLeft + a.offsetWidth - view.clientWidth + 48; }
+      for (const x of D) if (x.page === dv.page && x.box) { const r = mk(x.box, 'pv-hl'); if (!first) { first = r; first.ax = x.box.a ? x.box.a.x1 * z : null; } }
+      if (!dv.full && first) { view.scrollTop = first.offsetTop - view.clientHeight / 2 + first.offsetHeight / 2; view.scrollLeft = (first.ax || first.offsetLeft + first.offsetWidth) - view.clientWidth + 48; }
       // page thumbnails, drawn small, with a mark where the lines are
       const ths = dv.el.querySelectorAll('.pv-th');
       for (const b of ths) { const k = +b.dataset.pg, s2 = p.sizes[k - 1], c = b.querySelector('canvas'), tz = 112 / s2.w;
         const tp = await doc.getPage(k); if (at !== dv.i || !b.isConnected) return; const tv = tp.getViewport({ scale: tz * dpr });
         c.width = Math.round(tv.width); c.height = Math.round(tv.height); c.style.width = s2.w * tz + 'px'; c.style.height = s2.h * tz + 'px';
         await tp.render({ canvasContext: c.getContext('2d'), viewport: tv }).promise;
-        const g = c.getContext('2d'); g.fillStyle = tone === 'under' ? 'rgba(224,72,72,.45)' : tone === 'check' ? 'rgba(80,120,220,.4)' : 'rgba(245,154,60,.55)';
+        const g = c.getContext('2d'); g.fillStyle = 'rgba(255,225,0,.6)'; g.globalCompositeOperation = 'multiply';
         for (const x of D) if (x.page === k && x.box) g.fillRect(0, (s2.h - x.box.y1) * tz * dpr, c.width, Math.max(3 * dpr, (x.box.y1 - x.box.y0) * tz * dpr)); }
     } catch (err) { const v = dv.el.querySelector('.pv-view'); if (v) v.innerHTML = '<div class="dv-none" style="margin:12px">Could not show this page.</div>'; }
   }
