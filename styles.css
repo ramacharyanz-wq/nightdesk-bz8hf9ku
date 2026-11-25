@@ -280,3 +280,7 @@ td.v-under,.fix small.v-under{color:var(--under);font-weight:800}
 /* Uploaded file name in the upload boxes */
 .slot .s.file{color:var(--text);font-weight:400}
 .slot .s.file[hidden]{display:none}
+
+/* Matches that balance only on amount */
+.b-check{background:var(--warn-soft);color:var(--warn)}
+.fix.k-check{border-left:3px solid var(--warn)}

@@ -153,8 +153,9 @@
       <div class="ln"><span>TO FIX</span><span>${fix}</span></div>
       <div class="ln"><span>CARD CODES</span><span>${r.wrong.length}</span></div>
       ${(r.crossIn || []).length + (r.crossOut || []).length ? `<div class="ln"><span>OTHER DEPT TERM.</span><span>${r.crossIn.length + r.crossOut.length}</span></div>` : ''}
+      ${(r.checks || []).length ? `<div class="ln"><span>CHECK THESE</span><span>${r.checks.length}</span></div>` : ''}
       <div class="ln"><span>MATCHED</span><span>${r.matches.length}</span></div>
-      <div class="stampwrap"><div class="stamp ${vc(r.variance)}">${nil ? 'BALANCED' : 'OUT<small>' + esc(money(r.variance, true)) + '</small>'}</div></div>
+      <div class="stampwrap"><div class="stamp ${vc(r.variance)}">${nil ? 'BALANCED' + ((r.checks || []).length ? `<small>${r.checks.length} TO CHECK</small>` : '') : 'OUT<small>' + esc(money(r.variance, true)) + '</small>'}</div></div>
       <div class="bar"></div>
     </div></div></div>`;
   }
@@ -175,12 +176,20 @@
   }
 
   /* ---------- detail ---------- */
-  const KIND = { terminal: 'Not in Opera', double: 'Double charge', opera: 'Not on terminal', declined: 'Declined on terminal', missing: 'Not in export', dup: 'Shown twice' };
+  const KIND = { terminal: 'Not in Opera', double: 'Double charge', opera: 'Not on terminal', declined: 'Declined on terminal', missing: 'Not in export', dup: 'Shown twice', tip: 'Tip not in Opera' };
   function fixCard(e) {
-    const x = e.row, T = x.side === 'T';
+    const x = e.row, T = x.side === 'T', P = e.pair; // P: the Opera posting a tip charge matched
     const term = T ? `<div class="loc">${ic.pos(18)}<div><div class="k">${esc(x.tn || "Terminal " + x.term)}</div><div class="v">${esc(x.time)} · ${esc(x.type)} ••${esc(x.l4)} · RRN ${esc(x.rrn)}</div></div></div>` : `<div class="loc none">${ic.pos(18)}<div>No terminal transaction</div></div>`;
-    const d140 = !T ? `<div class="loc">${ic.page(18)}<div><div class="k">D140 page ${esc(x.page)} · Room ${esc(x.room)}</div><div class="v">${esc(x.name)}${x.receipt ? ' · #' + esc(x.receipt) : ''}${x.ref ? ' · check ' + esc(x.ref) : ''} · ${esc(x.code)} ${esc(Engine.codeType(x.code))}</div></div></div>` : `<div class="loc none">${ic.page(18)}<div>Not in the D140</div></div>`;
+    const dx = T ? P : x;
+    const d140 = dx ? `<div class="loc">${ic.page(18)}<div><div class="k">D140 page ${esc(dx.page)} · Room ${esc(dx.room)}${P ? ' · ' + esc(money(dx.amt)) : ''}</div><div class="v">${esc(dx.name)}${dx.receipt ? ' · #' + esc(dx.receipt) : ''}${dx.ref ? ' · check ' + esc(dx.ref) : ''} · ${esc(dx.code)} ${esc(Engine.codeType(dx.code))}</div></div></div>` : `<div class="loc none">${ic.page(18)}<div>Not in the D140</div></div>`;
     return `<article class="fix k-${e.kind}${e.kind === "dup" ? "" : " v-" + vc(e.effect)}"><div class="top"><span class="badge b-${e.kind}${e.kind === "dup" || !cents(e.effect) ? "" : " b-" + vc(e.effect)}">${esc(KIND[e.kind])}</span><div class="amt"><b class="num">${money(x.amt)}</b><small class="${e.kind === "dup" ? "" : "v-" + vc(e.effect)}">${e.kind === "dup" ? "counted once" : "variance " + money(e.effect, true)}</small></div></div>${term}${d140}<div class="hint">${esc(e.hint)}</div></article>`;
+  }
+  // A pair that balances only on amount: show both sides so a person can confirm it.
+  function checkCard(m) {
+    const amt = m.t.reduce((a, y) => a + y.amt, 0);
+    const T = m.t.map(y => `<div class="loc">${ic.pos(18)}<div><div class="k">${esc(y.tn)} · ${esc(money(y.amt))}</div><div class="v">${esc(y.time)} · ${esc(y.type)} ••${esc(y.l4)} · RRN ${esc(y.rrn || '-')}</div></div></div>`).join('');
+    const D = m.d.map(x => `<div class="loc">${ic.page(18)}<div><div class="k">D140 page ${esc(x.page)} · Room ${esc(x.room)} · ${esc(money(x.amt))}</div><div class="v">${esc(x.name)}${x.receipt ? ' · #' + esc(x.receipt) : ''} · ${esc(x.code)} ${esc(Engine.codeType(x.code))}${x.l4 ? ' ••' + esc(x.l4) : ''}</div></div></div>`).join('');
+    return `<article class="fix k-check"><div class="top"><span class="badge b-check">Check</span><div class="amt"><b class="num">${money(amt)}</b><small>balances on amount</small></div></div>${T}${D}<div class="hint">${esc(m.why)}. Confirm it is the same guest and payment.</div></article>`;
   }
   function sheetTSV(r) {
     const types = sheetTypes(r);
@@ -195,8 +204,10 @@
     if (!S.res || !r || r.skip) { el.hidden = true; return; }
     el.hidden = false;
     const fixes = r.ex.filter(e => e.kind !== 'dup' && e.kind !== 'missing');
-    const tabs = [['fix', 'To fix', fixes.length, fixes.length ? 'alert' : ''], ['codes', 'Card codes', r.wrong.length, ''], ['sheet', 'Recon sheet', null, ''], ['matched', 'Matched', r.matches.length, '']];
-    if (!S.tab) S.tab = fixes.length || (r.crossIn || []).length || (r.crossOut || []).length ? 'fix' : r.wrong.length ? 'codes' : 'sheet';
+    const checks = r.checks || [], otherNight = r.otherNight || [], nonCard = r.nonCard || [];
+    const nFix = fixes.length + checks.length;
+    const tabs = [['fix', 'To fix', nFix, nFix ? 'alert' : ''], ['codes', 'Card codes', r.wrong.length, ''], ['sheet', 'Recon sheet', null, ''], ['matched', 'Matched', r.matches.length, '']];
+    if (!S.tab) S.tab = nFix || (r.crossIn || []).length || (r.crossOut || []).length || otherNight.length || nonCard.length ? 'fix' : r.wrong.length ? 'codes' : 'sheet';
     const types = sheetTypes(r).filter(ty => r.sheet[ty].tt || r.sheet[ty].op);
     const max = Math.max(1, ...types.map(ty => Math.max(Math.abs(r.sheet[ty].tt), Math.abs(r.sheet[ty].op))));
     const bars = types.map(ty => { const o = r.sheet[ty], v = o.tt - o.op;
@@ -208,8 +219,11 @@
     let body = '';
     if (S.tab === 'fix') {
       const rest = r.ex.filter(e => e.kind === 'dup' || e.kind === 'missing');
-      body = fixes.length ? `<div class="fixes">${fixes.map(fixCard).join('')}</div>` : `<div class="nothing">${ic.party(40)}<b>Nothing to fix</b><span>Every posting matches a terminal transaction.</span></div>`;
+      body = fixes.length ? `<div class="fixes">${fixes.map(fixCard).join('')}</div>` : checks.length ? '' : `<div class="nothing">${ic.party(40)}<b>Nothing to fix</b><span>Every posting matches a terminal transaction.</span></div>`;
+      if (checks.length) body += `<h3 style="margin:${fixes.length ? 22 : 0}px 0 4px;font-size:15px">Check these (${checks.length})</h3><p style="margin:0 0 12px;color:var(--muted);font-size:13px">These balance only on amount. They may be fine, or two separate mistakes that cancel out. Look at both sides.</p><div class="fixes">${checks.map(checkCard).join('')}</div>`;
       if (rest.length) body += `<h3 style="margin:22px 0 12px;font-size:15px">Can't be checked with this export (${rest.length})</h3><div class="fixes">${rest.map(fixCard).join('')}</div>`;
+      if (otherNight.length) body += `<h3 style="margin:22px 0 4px;font-size:15px">From another night, not counted (${otherNight.length})</h3><p style="margin:0 0 12px;color:var(--muted);font-size:13px">Completions in this export from a different batch that match nothing in tonight's D140.</p><div class="list">${otherNight.map(y => `<div class="lrow"><span class="g">${esc(y.type)} ••${esc(y.l4)}</span><span class="m room">Batch ${esc(y.batch || '')}</span><span class="m pg">${esc(y.date || '')}</span><span class="m rc">${esc(y.time)}</span><span class="amtc num">${money(y.amt)}</span><span class="move"><span class="chip to">${esc(y.tn)}</span></span></div>`).join('')}</div>`;
+      if (nonCard.length) body += `<h3 style="margin:22px 0 4px;font-size:15px">Not card payments, not checked (${nonCard.length})</h3><div class="list">${nonCard.map(x => `<div class="lrow"><span class="g">${esc(x.name)}</span><span class="m room">Rm ${esc(x.room)}</span><span class="m pg">p.${esc(x.page)}</span><span class="m rc">${esc(x.code)}</span><span class="amtc num">${money(x.amt)}</span><span class="move"></span></div>`).join('')}</div>`;
       const xi = r.crossIn || [], xo = r.crossOut || [];
       if (xi.length || xo.length) body += `<h3 style="margin:22px 0 4px;font-size:15px">Used another department's terminal (${xi.length + xo.length})</h3><p style="margin:0 0 12px;color:var(--muted);font-size:13px">Nothing to fix in Opera. Each charge is counted in the department where it was posted.</p><div class="list">${
         xi.map(c => `<div class="lrow"><span class="g">${esc(c.d ? c.d.name + ' · Rm ' + c.d.room : 'No posting matched')}</span><span class="m room">Posted ${esc(S.sel)}</span><span class="m pg">${c.d ? 'p.' + esc(c.d.page) : ''}</span><span class="m rc">${c.d && c.d.receipt ? '#' + esc(c.d.receipt) : ''}</span><span class="amtc num">${money(c.t.amt)}</span><span class="move"><span class="chip to">${esc(c.t.tn)} · ${esc(c.t.org)}</span><span class="m">${esc(c.t.time)} · ${esc(c.t.type)} ••${esc(c.t.l4)}</span></span></div>`).join('') +
@@ -254,7 +268,11 @@
     const r = S.res && S.res[S.sel]; if (r && r.warn) b.push(`<div class="banner">${ic.alert(18)}<span>${esc(r.warn)}</span></div>`);
     if (r && !r.skip) { const oth = deptName(S.sel === 'FO' ? 'F&B' : 'FO'), me = deptName(S.sel), sum = l => l.reduce((a, c) => a + c.t.amt, 0);
       if (r.crossIn.length) b.push(`<div class="banner info">${ic.pos(18)}<span>${me} includes ${money(sum(r.crossIn))} (${r.crossIn.length}) charged on ${oth} terminals and posted in ${me} Opera. It is counted here, so it is not a difference. See the To fix tab.</span></div>`);
-      if (r.crossOut.length) b.push(`<div class="banner info">${ic.pos(18)}<span>${money(sum(r.crossOut))} (${r.crossOut.length}) charged on ${me} terminals belongs to ${oth} and is counted there. ${me} terminal totals here are lower than the terminal report by this amount.</span></div>`); }
+      if (r.crossOut.length) b.push(`<div class="banner info">${ic.pos(18)}<span>${money(sum(r.crossOut))} (${r.crossOut.length}) charged on ${me} terminals belongs to ${oth} and is counted there. ${me} terminal totals here are lower than the terminal report by this amount.</span></div>`);
+      const ck = r.checks || [], on = r.otherNight || [], nc = r.nonCard || [];
+      if (ck.length) b.push(`<div class="banner">${ic.alert(18)}<span>${ck.length} ${ck.length === 1 ? 'match balances' : 'matches balance'} only on amount (different cards, or two items against one). Two mistakes can cancel out and look balanced. Check ${ck.length === 1 ? 'it' : 'them'} on the To fix tab.</span></div>`);
+      if (on.length) b.push(`<div class="banner info">${ic.pos(18)}<span>${on.length} completion${on.length === 1 ? '' : 's'} (${money(on.reduce((a, y) => a + y.amt, 0))}) from another night in this export ${on.length === 1 ? 'was' : 'were'} not counted.</span></div>`);
+      if (nc.length) b.push(`<div class="banner info">${ic.page(18)}<span>${nc.length} D140 posting${nc.length === 1 ? '' : 's'} (${money(nc.reduce((a, x) => a + x.amt, 0))}) ${nc.length === 1 ? 'is not a card payment' : 'are not card payments'} (code ${[...new Set(nc.map(x => x.code))].join(', ')}) and ${nc.length === 1 ? 'was' : 'were'} not checked.</span></div>`); }
     $('#banners').innerHTML = b.join('');
     $('#banners').style.display = b.length ? 'grid' : 'none'; $('#banners').style.gap = '10px';
     const any = S.res && (S.res.FO || S.res['F&B']); const rr = any && !any.skip ? any : null;

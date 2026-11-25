@@ -5,7 +5,7 @@ const Report = (() => {
   const pn = n => Math.abs(n) < 0.005 ? '' : (n < 0 ? '-' : '') + Math.abs(n).toLocaleString('en-NZ', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const pn0 = n => Math.abs(n) < 0.005 ? '0.00' : (n < 0 ? '-' : '') + Math.abs(n).toLocaleString('en-NZ', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const cents = n => Math.round(n * 100);
-  const KIND = { terminal: 'On terminal, not in Opera', double: 'Double charge', opera: 'In Opera, not on terminal', declined: 'Declined on terminal', missing: 'Not in export (cannot check)', dup: 'Shown twice in export' };
+  const KIND = { terminal: 'On terminal, not in Opera', double: 'Double charge', opera: 'In Opera, not on terminal', declined: 'Declined on terminal', missing: 'Not in export (cannot check)', tip: 'Tip not in Opera', dup: 'Shown twice in export' };
 
   // Logo: two overlapping rounded squares, the matched area in amber.
   function logo(doc, x, y, s, NAVY, AMB) {
@@ -54,7 +54,7 @@ const Report = (() => {
       fig('Terminals', pm(r.tTot), x + 22); fig('Opera D140', pm(r.dTot), x + 22 + fw); fig('Variance', nil ? '0.00' : pm(r.variance), x + 22 + 2 * fw, vcol(r.variance));
       doc.setDrawColor(...LINE); doc.setLineWidth(0.8); doc.line(x + 22, top + 96, x + cw - 18, top + 96);
       const fix = r.ex.filter(e => e.kind !== 'dup' && e.kind !== 'missing').length;
-      const pts = [`${fix} item${fix === 1 ? '' : 's'} to fix`, `${r.wrong.length} posting${r.wrong.length === 1 ? '' : 's'} on the wrong card code`, `${r.matches.length} matched transactions${(r.crossIn || []).length + (r.crossOut || []).length ? `, ${(r.crossIn || []).length + (r.crossOut || []).length} on the other department's terminal` : ''}`];
+      const nck = (r.checks || []).length; const pts = [`${fix} item${fix === 1 ? '' : 's'} to fix${nck ? `, ${nck} to check (balance on amount only)` : ''}`, `${r.wrong.length} posting${r.wrong.length === 1 ? '' : 's'} on the wrong card code`, `${r.matches.length} matched transactions${(r.crossIn || []).length + (r.crossOut || []).length ? `, ${(r.crossIn || []).length + (r.crossOut || []).length} on the other department's terminal` : ''}`];
       if (r.checkable !== null) pts.push(`Checkable variance ${pm(r.checkable)} (export incomplete)`);
       doc.setFont('helvetica', 'normal'); doc.setFontSize(9.2); doc.setTextColor(...INK);
       pts.forEach((t, j) => { const py = top + 114 + j * 14; doc.setFillColor(...AMB); doc.circle(x + 26, py - 3, 2, 'F'); doc.text(clean(t), x + 34, py); });
@@ -86,12 +86,25 @@ const Report = (() => {
       const fixes = r.ex.filter(e => e.kind !== 'dup' && e.kind !== 'missing'), rest = r.ex.filter(e => e.kind === 'dup' || e.kind === 'missing');
       const exTable = (list, y) => table({ startY: y, head: [['#', 'What', 'Amount', 'Effect', 'Terminal', 'D140', 'Action']],
         body: list.map((e, i) => { const x = e.row, T = x.side === 'T'; return [i + 1, KIND[e.kind], pm(x.amt), e.kind === 'dup' ? 'none' : pm(e.effect),
-          T ? clean(`${x.tn || x.term}\n${x.time}  ${x.type} ..${x.l4}\nRRN ${x.rrn}`) : '-', T ? '-' : clean(`Page ${x.page}  Room ${x.room}\n${x.name}${x.receipt ? '\n#' + x.receipt : ''}\n${x.code} ${Engine.codeType(x.code)}`), clean(e.hint)]; }),
+          T ? clean(`${x.tn || x.term}\n${x.time}  ${x.type} ..${x.l4}\nRRN ${x.rrn}`) : '-', T ? (e.pair ? clean(`Page ${e.pair.page}  Room ${e.pair.room}\n${e.pair.name}\nPosted ${e.pair.amt.toFixed(2)}`) : '-') : clean(`Page ${x.page}  Room ${x.room}\n${x.name}${x.receipt ? '\n#' + x.receipt : ''}\n${x.code} ${Engine.codeType(x.code)}`), clean(e.hint)]; }),
         columnStyles: { 0: { cellWidth: 20, halign: 'center' }, 1: { cellWidth: 96, fontStyle: 'bold' }, 2: { cellWidth: 60, halign: 'right' }, 3: { cellWidth: 56, halign: 'right' }, 4: { cellWidth: 128 }, 5: { cellWidth: 140 } },
         didParseCell: d => { if (d.section === 'body' && d.column.index === 1) { const e = list[d.row.index]; d.cell.styles.textColor = e.kind === "dup" || !cents(e.effect) ? MUTE : vcol(e.effect); } if (d.section === "body" && d.column.index === 3) { const e = list[d.row.index]; if (e.kind !== "dup" && cents(e.effect)) { d.cell.styles.textColor = vcol(e.effect); d.cell.styles.fontStyle = "bold"; } } } });
       y = h2(`To fix (${fixes.length})`, y) + 4;
       y = fixes.length ? exTable(fixes, y) : note('Nothing to fix. Every posting matches a terminal transaction.', y + 8);
       if (rest.length) { y = need(y + 20, 80); y = h2(`Cannot be checked with this export (${rest.length})`, y) + 4; y = exTable(rest, y); }
+      const ck = r.checks || [];
+      if (ck.length) {
+        y = need(y + 20, 80); y = h2(`Check these (${ck.length})`, y) + 4;
+        y = note('These balance only on amount. They may be fine, or two separate mistakes that cancel out. Confirm it is the same guest and payment.', y + 8) - 2;
+        y = table({ startY: y, head: [['#', 'Why', 'Terminal', 'D140']],
+          body: ck.map((m, i) => [i + 1, clean(m.why), clean(m.t.map(t => `${t.tn}  ${t.time}  ${t.type} ..${t.l4}  ${t.amt.toFixed(2)}`).join('\n')), clean(m.d.map(x => `Page ${x.page}  Room ${x.room}  ${x.name}  ${x.code}${x.l4 ? ' ..' + x.l4 : ''}  ${x.amt.toFixed(2)}`).join('\n'))]),
+          columnStyles: { 0: { cellWidth: 20, halign: 'center' }, 1: { cellWidth: 170, fontStyle: 'bold', textColor: ORG } } });
+      }
+      const on = r.otherNight || [], ncp = r.nonCard || [];
+      if (on.length) { y = need(y + 20, 60); y = h2(`From another night, not counted (${on.length})`, y) + 4;
+        y = table({ startY: y, head: [['Terminal', 'Batch', 'Date / time', 'Card', 'Amount']], body: on.map(t => [clean(t.tn), t.batch || '', `${t.date || ''} ${t.time}`, clean(`${t.type} ..${t.l4}`), pm(t.amt)]), columnStyles: { 4: { halign: 'right' } } }); }
+      if (ncp.length) { y = need(y + 20, 60); y = h2(`Not card payments, not checked (${ncp.length})`, y) + 4;
+        y = table({ startY: y, head: [['Code', 'Guest', 'Room', 'Page', 'Amount']], body: ncp.map(x => [x.code, clean(x.name), x.room, x.page, pm(x.amt)]), columnStyles: { 4: { halign: 'right' } } }); }
       const xi = r.crossIn || [], xo = r.crossOut || [];
       if (xi.length || xo.length) {
         y = need(y + 20, 80); y = h2(`Used another department's terminal (${xi.length + xo.length})`, y) + 4;
