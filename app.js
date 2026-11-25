@@ -70,9 +70,10 @@
       } else if (/\.pdf$/i.test(f.name) || f.type === 'application/pdf') {
         const slot = hint || 'FO'; S.busy[slot] = true; renderSlots();
         try {
-          const pl = await Engine.pdfLines(await f.arrayBuffer());
-          const p = Engine.parseD140(pl.lines, pl.pages, f.name);
-          S.pdf[p.dept] = { name: f.name, ...p }; delete S.err[p.dept];
+          const buf = await f.arrayBuffer(), keep = buf.slice(0); // pdf.js takes over its copy; keep one to show pages
+          const pl = await Engine.pdfLines(buf);
+          const p = Engine.parseD140(pl.lines, pl.pages, f.name, pl.geo, pl.sizes);
+          S.pdf[p.dept] = { name: f.name, ...p, buf: keep }; delete S.err[p.dept];
           if (hint && hint !== p.dept) toast(`Moved to ${p.dept === 'FO' ? 'Front Office' : 'F&B'}: that's a ${p.dept} D140`);
         } catch (e) { S.err[slot] = f.name + ': no D140 postings found'; }
         S.busy[slot] = false;
@@ -191,6 +192,113 @@
     const D = m.d.map(x => `<div class="loc">${ic.page(18)}<div><div class="k">D140 page ${esc(x.page)} · Room ${esc(x.room)} · ${esc(money(x.amt))}</div><div class="v">${esc(x.name)}${x.receipt ? ' · #' + esc(x.receipt) : ''} · ${esc(x.code)} ${esc(Engine.codeType(x.code))}${x.l4 ? ' ••' + esc(x.l4) : ''}${x.by ? ' · by ' + esc(x.by) : ''}</div></div></div>`).join('');
     return `<article class="fix k-check"><div class="top"><span class="badge b-check">Check</span><div class="amt"><b class="num">${money(amt)}</b><small>balances on amount</small></div></div>${T}${D}<div class="hint">${esc(m.why)}. Confirm it is the same guest and payment.</div></article>`;
   }
+  /* ---------- difference detail view (tap a card in To fix) ---------- */
+  const CARDNAME = { VISA: 'Visa', MC: 'Mastercard', Amex: 'American Express', EFTPOS: 'EFTPOS', 'Union Pay': 'UnionPay', JCB: 'JCB', 'AliPay & WeChat': 'AliPay / WeChat' };
+  const ENTRY = { ICC_CONTACTLESS: 'Contactless Card', ICC: 'Chip Card', MANUAL: 'Manual Entry', MAG_STRIPE: 'Swiped Card' };
+  const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'], MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  const longDate = s => { const m = String(s || '').match(/(\d{4})-(\d\d)-(\d\d)/); if (!m) return esc(s); const d = new Date(+m[1], +m[2] - 1, +m[3]); return `${DAYS[d.getDay()]}, ${d.getDate()} ${MONTHS[d.getMonth()]} ${m[1]}`; };
+  const time12 = t => { const m = String(t || '').match(/(\d\d):(\d\d)/); if (!m) return esc(t); const h = +m[1]; return `${h % 12 || 12}:${m[2]} ${h < 12 ? 'AM' : 'PM'}`; };
+  const stLabel = st => /PREAUTH_COMPLETION/.test(st) ? ['Pre-Auth Complete', 'Pre-Auth'] : /REFUND/.test(st) ? ['Refund', 'Refund'] : /PREAUTH/.test(st) ? ['Pre-Auth', 'Pre-Auth'] : ['Sale', 'Sale'];
+  // One terminal receipt, laid out like the real one. hl = which line to highlight ('total' or 'tip').
+  function termReceipt(y, hl, tag, tone) {
+    const [status, line] = stLabel(y.status || ''), base = y.grat ? y.amt - y.grat : y.amt, h = w => hl === w ? ` hl t-${tone}` : '', tg = w => hl === w && tag ? ` <i class="tag t-${tone}">${esc(tag)}</i>` : '';
+    const $a = n => '$' + plain(Math.abs(n));
+    return `<div class="rc"><div class="rc-logo">${ic.pos(20)}Terminal receipt</div><div class="rc-c rc-tn">${esc(y.tn)}</div>
+      <div class="rc-c">${y.mid ? `Merchant ID: ${esc(y.mid)}<br>` : ''}Terminal ID: ${esc(y.term)}</div><div class="rc-gap"></div>
+      <div class="rc-c">Transaction History<br>${longDate(y.date)}</div><hr>
+      <div class="rc-r"><span>${esc(CARDNAME[y.type] || y.card || y.type)}</span><span>.......${esc(y.l4)}</span></div>
+      ${ENTRY[y.entry] ? `<div class="rc-r"><span>${ENTRY[y.entry]}</span><span></span></div>` : ''}
+      ${y.rrn ? `<div class="rc-r"><span>TRAN</span><span>${esc(String(y.rrn).slice(-6))}</span></div>` : ''}
+      <div class="rc-r"><span>Time</span><span>${time12(y.time)}</span></div>
+      ${y.rrn ? `<div class="rc-r"><span>RRN</span><span>${esc(y.rrn)}</span></div>` : ''}
+      <div class="rc-r"><span>Status</span><span>${esc(status)}</span></div>
+      <div class="rc-r"><span>Outcome</span><span>${/DECLINED/.test(y.status || '') ? 'Declined' : 'Approved'}</span></div>
+      <div class="rc-r"><span>${esc(line)}</span><span>${$a(base)}</span></div>
+      ${y.grat ? `<div class="rc-r${h('tip')}"><span>Tip${tg('tip')}</span><span>${$a(y.grat)}</span></div>` : ''}
+      <div class="rc-r${h('total')}"><span>Total${tg('total')}</span><span>${$a(y.amt)}</span></div><hr>
+      <div class="rc-note">Rebuilt from the terminal export</div></div>`;
+  }
+  // Every difference on the To fix tab, in the order the cards are shown.
+  function dvItems(r) {
+    const tone = e => e.kind === 'dup' || !cents(e.effect) ? 'check' : vc(e.effect);
+    const ex = e => { const x = e.row; return { label: KIND[e.kind], tone: tone(e), amt: x.amt, sub: e.kind === 'dup' ? 'counted once' : 'variance ' + money(e.effect, true), hint: e.hint,
+      T: x.side === 'T' ? [x] : [], D: x.side === 'D' ? [x] : e.pair ? [e.pair] : [], hl: e.kind === 'tip' ? 'tip' : 'total', tag: KIND[e.kind] }; };
+    const fixes = r.ex.filter(e => e.kind !== 'dup' && e.kind !== 'missing'), rest = r.ex.filter(e => e.kind === 'dup' || e.kind === 'missing');
+    return [...fixes.map(ex), ...(r.checks || []).map(m => ({ label: 'Check', tone: 'check', amt: m.t.reduce((a, y) => a + y.amt, 0), sub: 'balances on amount', hint: m.why + '. Confirm it is the same guest and payment.', T: m.t, D: m.d, hl: 'total', tag: 'Check' })), ...rest.map(ex)];
+  }
+  const dv = { el: null, items: [], i: 0, page: null, full: false, docs: {} };
+  const pdfFor = x => Object.values(S.pdf).find(p => p && p.name === x.file) || null;
+  function d140Text(x) { return `<b>${esc(x.date)} ${esc(x.time)}</b> · ${esc(x.code)} ${esc(Engine.codeType(x.code))}${x.l4 ? ' · card ••' + esc(x.l4) : ''} · Room ${esc(x.room)} · ${esc(x.name)}${x.receipt ? ' · #' + esc(x.receipt) : ''}${x.ref ? ' · check ' + esc(x.ref) : ''} · <b>${money(x.amt)}</b>${x.by ? ' · by ' + esc(x.by) : ''}`; }
+  function renderDV() {
+    const it = dv.items[dv.i], el = dv.el; if (!it) return closeDV();
+    const D = it.D, p = D.length ? pdfFor(D[0]) : null, pages = p ? p.sizes.length : 0;
+    if (!dv.page || !D.some(x => x.page === dv.page) && dv.pinned !== dv.i) { dv.page = D.length ? D[0].page : null; dv.full = false; }
+    const rc = it.T.length ? it.T.map(y => termReceipt(y, it.hl, it.tag, it.tone)).join('') : `<div class="dv-none"><b>No terminal receipt</b>No approved ${money(it.amt)} charge on any terminal for this.</div>`;
+    let op;
+    if (!D.length) op = `<div class="dv-none"><b>Not in the D140</b>${S.pdf[S.sel] ? `Searched all ${S.pdf[S.sel].sizes ? S.pdf[S.sel].sizes.length : ''} pages of D140 ${esc(deptName(S.sel))} for ${money(it.amt)}. Nothing found.` : 'No D140 loaded for this department.'}</div>`;
+    else op = `<div class="pv">${p && p.buf ? `<div class="pv-bar">${ic.page(18)}<span>D140 ${esc(deptName(D[0].dept))} · <b class="pg">Page ${dv.page} of ${pages}</b></span><button class="btn sm" data-a="full">${dv.full ? 'Zoom to line' : 'Full page'}</button></div>
+      <div class="pv-view${dv.full ? ' full' : ''}"><div class="pv-page"><canvas></canvas></div></div>` : ''}
+      <div class="pv-read">${D.map(d140Text).join('<br>')}${D.some(x => x.page !== dv.page) ? `<br><span class="m">Also on page ${[...new Set(D.filter(x => x.page !== dv.page).map(x => x.page))].join(', ')}</span>` : ''}</div>
+      ${p && p.buf && pages > 1 ? `<div class="pv-thumbs">${p.sizes.map((s, k) => `<button class="pv-th${k + 1 === dv.page ? ' on' : ''}${D.some(x => x.page === k + 1) ? ' has' : ''}" data-pg="${k + 1}" aria-label="Page ${k + 1}"><canvas></canvas><span>Page ${k + 1}</span></button>`).join('')}</div>` : ''}</div>`;
+    el.innerHTML = `<div class="dv-in">
+      <div class="dv-top"><button class="dv-back" data-a="close">${ic.arrow(18)}<span>To fix</span></button><div class="dv-nav"><button class="icon-btn" data-a="prev" aria-label="Previous difference" ${dv.i ? '' : 'disabled'}>${ic.arrow(18)}</button><span>${dv.i + 1} of ${dv.items.length}</span><button class="icon-btn" data-a="next" aria-label="Next difference" ${dv.i < dv.items.length - 1 ? '' : 'disabled'}>${ic.arrow(18)}</button></div></div>
+      <div class="dv-head"><span class="badge b-${it.tone === 'check' ? 'check' : it.tone}">${esc(it.label)}</span><b class="num dv-amt">${money(it.amt)}</b><small class="v-${it.tone === 'check' ? 'check' : it.tone}">${esc(it.sub)}</small></div>
+      <div class="dv-hint">${esc(it.hint)}</div>
+      <div class="dv-two"><section><h4>Terminal</h4>${rc}</section><section><h4>Opera D140</h4>${op}</section></div></div>`;
+    el.scrollTop = 0;
+    el.querySelectorAll('[data-a]').forEach(b => b.addEventListener('click', () => { const a = b.dataset.a;
+      if (a === 'close') closeDV(); else if (a === 'prev') go(-1); else if (a === 'next') go(1); else if (a === 'full') { dv.full = !dv.full; renderDV(); } }));
+    el.querySelectorAll('.pv-th').forEach(b => b.addEventListener('click', () => { dv.page = +b.dataset.pg; dv.pinned = dv.i; renderDV(); }));
+    if (p && p.buf && D.length) drawPages(p, D, it.tone);
+  }
+  async function getDoc(p) { return dv.docs[p.name] = dv.docs[p.name] || pdfjsLib.getDocument({ data: p.buf.slice(0) }).promise; }
+  async function drawPages(p, D, tone) {
+    const at = dv.i, view = dv.el.querySelector('.pv-view'), box = dv.el.querySelector('.pv-page'); if (!view) return;
+    try {
+      const doc = await getDoc(p), pg = await doc.getPage(dv.page), sz = p.sizes[dv.page - 1];
+      if (at !== dv.i || !box.isConnected) return;
+      const W = view.clientWidth, z = dv.full ? W / sz.w : Math.max(W / sz.w, 1.35), dpr = Math.min(window.devicePixelRatio || 1, 3);
+      const vp = pg.getViewport({ scale: z * dpr }), cv = box.querySelector('canvas');
+      cv.width = Math.round(vp.width); cv.height = Math.round(vp.height); box.style.width = sz.w * z + 'px'; box.style.height = sz.h * z + 'px';
+      await pg.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
+      if (at !== dv.i || !box.isConnected) return;
+      const mk = (b, cls) => { const d = document.createElement('i'); d.className = cls; Object.assign(d.style, { left: b.x0 * z + 'px', top: (sz.h - b.y1) * z + 'px', width: (b.x1 - b.x0) * z + 'px', height: (b.y1 - b.y0) * z + 'px' }); box.appendChild(d); return d; };
+      let first = null;
+      for (const x of D) if (x.page === dv.page && x.box) { const r = mk(x.box, `pv-hl t-${tone}`); first = first || r; if (x.box.a) first.amtEl = first.amtEl || mk(x.box.a, `pv-amt t-${tone}`); }
+      if (!dv.full && first) { const a = first.amtEl || first; view.scrollTop = first.offsetTop - view.clientHeight / 2 + first.offsetHeight / 2; view.scrollLeft = a.offsetLeft + a.offsetWidth - view.clientWidth + 48; }
+      // page thumbnails, drawn small, with a mark where the lines are
+      const ths = dv.el.querySelectorAll('.pv-th');
+      for (const b of ths) { const k = +b.dataset.pg, s2 = p.sizes[k - 1], c = b.querySelector('canvas'), tz = 112 / s2.w;
+        const tp = await doc.getPage(k); if (at !== dv.i || !b.isConnected) return; const tv = tp.getViewport({ scale: tz * dpr });
+        c.width = Math.round(tv.width); c.height = Math.round(tv.height); c.style.width = s2.w * tz + 'px'; c.style.height = s2.h * tz + 'px';
+        await tp.render({ canvasContext: c.getContext('2d'), viewport: tv }).promise;
+        const g = c.getContext('2d'); g.fillStyle = tone === 'under' ? 'rgba(224,72,72,.45)' : tone === 'check' ? 'rgba(80,120,220,.4)' : 'rgba(245,154,60,.55)';
+        for (const x of D) if (x.page === k && x.box) g.fillRect(0, (s2.h - x.box.y1) * tz * dpr, c.width, Math.max(3 * dpr, (x.box.y1 - x.box.y0) * tz * dpr)); }
+    } catch (err) { const v = dv.el.querySelector('.pv-view'); if (v) v.innerHTML = '<div class="dv-none" style="margin:12px">Could not show this page.</div>'; }
+  }
+  function go(n) { const j = dv.i + n; if (j < 0 || j >= dv.items.length) return; dv.i = j; dv.page = null; dv.pinned = null; renderDV(); }
+  let dvFocus = null;
+  function openDV(i) {
+    const r = S.res && S.res[S.sel]; if (!r) return;
+    if (!dv.el) { dv.el = document.createElement('div'); dv.el.className = 'dv'; dv.el.setAttribute('role', 'dialog'); dv.el.setAttribute('aria-modal', 'true'); dv.el.setAttribute('aria-label', 'Difference details'); document.body.appendChild(dv.el); wireDVSwipe(); }
+    dv.items = dvItems(r); dv.i = i; dv.page = null; dv.pinned = null; dvFocus = document.activeElement;
+    renderDV(); dv.el.classList.add('open'); lockPage(true);
+    history.pushState({ dv: 1 }, ''); setTimeout(() => dv.el.querySelector('.dv-back')?.focus({ preventScroll: true }), 30);
+  }
+  function closeDV(fromPop) {
+    if (!dv.el || !dv.el.classList.contains('open')) return;
+    dv.el.classList.remove('open'); lockPage(false); if (!fromPop && history.state && history.state.dv) history.back();
+    const cards = document.querySelectorAll('#detail .fix.tap'); (cards[dv.i] || dvFocus)?.focus?.({ preventScroll: true });
+  }
+  window.addEventListener('popstate', () => closeDV(true));
+  document.addEventListener('keydown', e => { if (!dv.el || !dv.el.classList.contains('open')) return; if (e.key === 'Escape') closeDV(); else if (e.key === 'ArrowRight' && !e.target.closest('input')) go(1); else if (e.key === 'ArrowLeft' && !e.target.closest('input')) go(-1); });
+  // Swipe left / right anywhere except on the D140 page (which scrolls sideways itself).
+  function wireDVSwipe() {
+    let x0 = null, y0 = 0, horiz = null;
+    dv.el.addEventListener('touchstart', e => { if (e.touches.length !== 1 || e.target.closest('.pv-view,.pv-thumbs')) { x0 = null; return; } x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; horiz = null; }, { passive: true });
+    dv.el.addEventListener('touchmove', e => { if (x0 === null) return; const dx = e.touches[0].clientX - x0, dy = e.touches[0].clientY - y0; if (horiz === null && Math.hypot(dx, dy) > 10) horiz = Math.abs(dx) > Math.abs(dy) * 1.4; }, { passive: true });
+    dv.el.addEventListener('touchend', e => { if (x0 === null || !horiz) { x0 = null; return; } const dx = e.changedTouches[0].clientX - x0; x0 = null; if (Math.abs(dx) > Math.min(110, innerWidth * 0.25)) go(dx < 0 ? 1 : -1); });
+  }
   function sheetTSV(r) {
     const types = sheetTypes(r);
     const head = ['Card type', 'Code', ...r.terms.map(t => tname(r, t)), "Terminals", "Opera", "Variance"];
@@ -246,6 +354,11 @@
       <div class="grid2"><div class="panel"><h3>By card type<span class="legend"><span><i style="background:var(--amber)"></i>Terminals</span><span><i style="background:var(--sky)"></i>Opera</span></span></h3><div class="bars">${bars}</div></div>
       <div class="panel"><h3>Terminals</h3><div class="terms">${terms}</div></div></div>
       <div><div class="tabs" role="tablist">${tabs.map(([k, l, n, c]) => `<button class="${S.tab === k ? 'on' : ''}" data-t="${k}" role="tab" aria-selected="${S.tab === k}">${l}${n !== null ? `<span class="count ${c}">${n}</span>` : ''}</button>`).join('')}</div><div style="padding-top:18px">${body}</div></div>`;
+    if (S.tab === 'fix') el.querySelectorAll('.fixes .fix').forEach((c, i) => {
+      c.classList.add('tap'); c.tabIndex = 0; c.setAttribute('role', 'button'); c.setAttribute('aria-label', (c.querySelector('.badge')?.textContent || '') + ' ' + (c.querySelector('.amt b')?.textContent || '') + ', open details');
+      c.insertAdjacentHTML('beforeend', `<div class="more">See receipt and D140 page${ic.arrow(16)}</div>`);
+      c.addEventListener('click', () => openDV(i)); c.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDV(i); } });
+    });
     el.querySelectorAll('.seg button').forEach(b => b.addEventListener('click', () => { S.sel = b.dataset.d; S.tab = null; renderReceipts(false); renderDetail(); }));
     el.querySelectorAll('.tabs button').forEach(b => b.addEventListener('click', () => { S.tab = b.dataset.t; const x = el.querySelector('.tabs').scrollLeft; renderDetail(); const t = $('#detail .tabs'); if (t) t.scrollLeft = x; }));
     { const t = el.querySelector('.tabs'), on = t && t.querySelector('.on'); if (t && on && t.scrollWidth > t.clientWidth) { const l = on.offsetLeft - 18, r = on.offsetLeft + on.offsetWidth - t.clientWidth + 18; if (t.scrollLeft > l) t.scrollLeft = l; else if (t.scrollLeft < r) t.scrollLeft = r; } }

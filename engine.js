@@ -24,10 +24,11 @@ const Engine = (() => {
 
   /* ---------- D140 PDF ---------- */
   async function pdfLines(buf) {
-    const doc = await pdfjsLib.getDocument({ data: buf }).promise; const lines = [], pages = [];
+    const doc = await pdfjsLib.getDocument({ data: buf }).promise; const lines = [], pages = [], geo = [], sizes = [];
     for (let p = 1; p <= doc.numPages; p++) {
-      const tc = await (await doc.getPage(p)).getTextContent();
-      const items = tc.items.filter(i => i.str && i.str.trim() !== '').map(i => ({ x: i.transform[4], y: i.transform[5], w: i.width, s: i.str }));
+      const pg = await doc.getPage(p), vp = pg.getViewport({ scale: 1 }); sizes.push({ w: vp.width, h: vp.height });
+      const tc = await pg.getTextContent();
+      const items = tc.items.filter(i => i.str && i.str.trim() !== '').map(i => ({ x: i.transform[4], y: i.transform[5], w: i.width, h: Math.abs(i.transform[3]) || i.height || 8, s: i.str }));
       const groups = [];
       for (const it of items) { const g = groups.find(g => Math.abs(g.y - it.y) < 2.5); if (g) g.items.push(it); else groups.push({ y: it.y, items: [it] }); }
       groups.sort((a, b) => b.y - a.y);
@@ -35,12 +36,14 @@ const Engine = (() => {
         g.items.sort((a, b) => a.x - b.x); let s = '', end = null;
         for (const it of g.items) { if (end !== null) { const gap = it.x - end; s += gap > 4 ? '  ' : gap > 0.8 ? ' ' : ''; } s += it.s; end = it.x + it.w; }
         lines.push(s); pages.push(p);
+        // Where the line sits on the page (PDF points, origin bottom-left), for highlighting it later.
+        geo.push({ y: g.y, h: Math.max(...g.items.map(i => i.h)), x0: g.items[0].x, x1: Math.max(...g.items.map(i => i.x + i.w)), items: g.items.map(i => ({ x: i.x, w: i.w, s: i.s.trim() })) });
       }
     }
-    return { lines, pages };
+    return { lines, pages, geo, sizes };
   }
   const POST = /^\s*(\d\d-\d\d-\d\d)\s+(\d\d:\d\d)\s+(\S+)\s+(.*?)\s+(9\d{4})\s+(.*?)\s*NZD\s+(-?\s*[\d,]+\.\d\d)\s+(-?\s*[\d,]+\.\d\d)/;
-  function parseD140(lines, pages, file) {
+  function parseD140(lines, pages, file, geo = [], sizes = []) {
     const rows = []; let grand = null;
     lines.forEach((l, i) => {
       const gm = l.match(/Grand Total\s+(-?\s*[\d,]+\.\d\d)\s+(-?\s*[\d,]+\.\d\d)/); if (gm) grand = num(gm[2]) - num(gm[1]);
@@ -53,14 +56,21 @@ const Engine = (() => {
       const amt = +(num(m[8]) - num(m[7])).toFixed(2); if (amt === 0) return;
       const cm = l.slice(m.index + m[0].length).match(/^\s*(\d{1,6})(?:-([A-Za-z0-9._]+))?/); // Cash ID + User Name
       const cashier = cm ? cm[1] : '', user = cm && cm[2] ? cm[2].replace(/@.*/, '') : '';
-      rows.push({ side: 'D', date: m[1], time: m[2], room: m[3], name, code: m[5], ref, l4, receipt, page: pages[i], amt, dept: m[5].startsWith('917') ? 'F&B' : 'FO', file, cashier, user });
+      // Box around the posting (its line + the card-number line under it) and around the amount.
+      let box = null; const g = geo[i];
+      if (g) {
+        const n = geo[i + 1] && pages[i + 1] === pages[i] && g.y - geo[i + 1].y < g.h * 2.6 ? geo[i + 1] : null;
+        const want = (amt > 0 ? m[8] : m[7]).replace(/\s/g, ''), it = [...g.items].reverse().find(t => t.s.replace(/\s/g, '') === want);
+        box = { y0: (n || g).y - 2, y1: g.y + g.h + 1, x0: Math.min(g.x0, n ? n.x0 : g.x0) - 3, x1: g.x1 + 3, a: it ? { x0: it.x - 2, x1: it.x + it.w + 2, y0: g.y - 2, y1: g.y + g.h + 1 } : null };
+      }
+      rows.push({ side: 'D', date: m[1], time: m[2], room: m[3], name, code: m[5], ref, l4, receipt, page: pages[i], amt, dept: m[5].startsWith('917') ? 'F&B' : 'FO', file, cashier, user, box, line: l.replace(/\s{2,}/g, '  ').trim(), line2: (geo[i + 1] && pages[i + 1] === pages[i]) ? nxt.trim() : '' });
     });
     if (!rows.length) throw new Error('No D140 postings found');
     const total = rows.reduce((a, r) => a + r.amt, 0);
     const dates = {}; rows.forEach(r => dates[r.date] = (dates[r.date] || 0) + 1);
     const top = Object.entries(dates).sort((a, b) => b[1] - a[1])[0][0].match(/(\d\d)-(\d\d)-(\d\d)/);
     const depts = {}; rows.forEach(r => depts[r.dept] = (depts[r.dept] || 0) + 1);
-    return { rows, grand, total, grandOk: grand === null || cents(grand) === cents(total), bdate: `20${top[3]}-${top[2]}-${top[1]}`, dept: Object.entries(depts).sort((a, b) => b[1] - a[1])[0][0] };
+    return { rows, sizes, grand, total, grandOk: grand === null || cents(grand) === cents(total), bdate: `20${top[3]}-${top[2]}-${top[1]}`, dept: Object.entries(depts).sort((a, b) => b[1] - a[1])[0][0] };
   }
 
   /* ---------- card types ---------- */
@@ -106,8 +116,20 @@ const Engine = (() => {
   // Names live on the device only (never in this code). Matching uses digits only, so
   // "44742500-0001", "447425000001" or merchant 44742500 + terminal 0001 all match.
   const dg = s => String(s == null ? "" : s).replace(/\D/g, "");
-  const isTermSheet = text => /TERMINAL[^,\n]*\([^)]*\)\s*-\s*\d/i.test(text) && !/terminal_id/i.test(text.slice(0, 2000));
+  // A simple names list: header "Name,Terminal ID[,Department]", one terminal per row.
+  const isNameList = text => /^﻿?\s*"?name"?\s*,\s*"?terminal[ _]?id"?/i.test(text);
+  const isTermSheet = text => isNameList(text) || (/TERMINAL[^,\n]*\([^)]*\)\s*-\s*\d/i.test(text) && !/terminal_id/i.test(text.slice(0, 2000)));
   function parseTermSheet(text) {
+    if (isNameList(text)) {
+      const out = [], seen = new Set();
+      for (const line of text.split(/\r?\n/).slice(1)) {
+        const [name, id, dep] = line.split(",").map(s => (s || "").replace(/^\s*"|"\s*$/g, "").trim());
+        const d = dg(id); if (!name || d.length < 4 || seen.has(d)) continue; seen.add(d);
+        const dept = /^f\s*&\s*b$|^fb$/i.test(dep) ? "F&B" : /^fo$/i.test(dep) ? "FO" : /^ignore$/i.test(dep) ? "Ignore" : "";
+        out.push({ id, name, dept });
+      }
+      return out;
+    }
     const out = [], seen = new Set(), re = /TERMINAL\s*(\d*)\s*\(([^)]+)\)\s*-\s*(\d[\d\s-]{3,}\d)/gi; let m;
     while ((m = re.exec(text))) {
       const id = m[3].replace(/\s+/g, ""), d = dg(id); if (seen.has(d)) continue; seen.add(d);
@@ -124,7 +146,10 @@ const Engine = (() => {
     return r => {
       const t = dg(r.terminal_id), m = dg(r.merchant_id), k = m + "|" + t; if (k in cache) return cache[k];
       const c = [t, m + t].filter(Boolean);
-      let hit = list.find(n => c.includes(n.d));
+      // A 12-digit sheet ID (merchant 6 + terminal 6, e.g. 123456000002) is the export's
+      // 8-digit ID with the padding zeros (12345602).
+      const short = d => d.length === 12 && /^0+$/.test(d.slice(6, 10)) ? d.slice(0, 6) + d.slice(-2) : d;
+      let hit = list.find(n => c.includes(n.d)) || (t.length === 8 && list.find(n => short(n.d) === t));
       if (!hit && t.length >= 4) { const s = list.filter(n => n.d.endsWith(t) || (n.d.length >= 6 && t.endsWith(n.d))); if (s.length === 1) hit = s[0]; }
       return (cache[k] = hit || null);
     };
@@ -178,7 +203,7 @@ const Engine = (() => {
       const key = rowKey(r), dept = moves[key] || home;
       const a = (st === 'SALE AUTHORISED' && !isNaN(orig) && orig > cur) ? orig : cur; // refunded sale: count what was charged
       const row = { side: 'T', key, home, dept, org: label(r, home), term: r.terminal_id, tn: (tinfo && tinfo.name) || "Terminal " + r.terminal_id, date: r.created_at_date, time: (r.created_at_time || '').slice(0, 5),
-        card: r.Product, type: cardType(r.Product), l4: String(r['card.last_four'] || '').padStart(4, '0'), bin: r['card.bin'], rrn: r.RRN, batch: r.batch_id, orig, status: st, amt: a, grat: num(r.Gratuity_amount) || 0 };
+        card: r.Product, type: cardType(r.Product), l4: String(r['card.last_four'] || '').padStart(4, '0'), bin: r['card.bin'], rrn: r.RRN, batch: r.batch_id, orig, status: st, amt: a, grat: num(r.Gratuity_amount) || 0, mid: r.merchant_id, entry: r.entry_mode || '' };
       const counts = st === 'SALE AUTHORISED' || st === 'PREAUTH_COMPLETION AUTHORISED' || st === 'REFUND AUTHORISED';
       const isComp = st === 'PREAUTH_COMPLETION AUTHORISED';
       // Filter by the terminal's own department; if that D140 isn't loaded, use the other one's date.
