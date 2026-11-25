@@ -19,9 +19,9 @@ const Report = (() => {
   function build(res, meta = {}) {
     const { jsPDF } = window.jspdf; const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
     const W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight(), M = 36;
-    const NAVY = [18, 29, 51], INK = [20, 32, 58], MUTE = [90, 104, 134], AMB = [255, 200, 97], SKY = [61, 99, 216], LINE = [217, 224, 238], SOFT = [244, 246, 251], RED = [210, 59, 59], GRN = [17, 144, 90], REDS = [252, 232, 232], GRNS = [226, 244, 235], ORG = [204, 74, 0];
+    const NAVY = [18, 29, 51], INK = [20, 32, 58], MUTE = [90, 104, 134], AMB = [255, 200, 97], SKY = [61, 99, 216], LINE = [217, 224, 238], SOFT = [244, 246, 251], RED = [210, 59, 59], GRN = [17, 144, 90], REDS = [252, 232, 232], GRNS = [226, 244, 235], ORG = [189, 85, 25];
     // Variance colour: terminals more than Opera = orange, less = red, nil = green
-    const OVR = [204, 74, 0], OVRS = [255, 231, 217];
+    const OVR = [189, 85, 25], OVRS = [252, 234, 224];
     const vcol = v => cents(v) === 0 ? GRN : v > 0 ? OVR : RED, vsoft = v => cents(v) === 0 ? GRNS : v > 0 ? OVRS : REDS;
     const depts = Object.entries(res).filter(([, r]) => !r.skip);
     const bd = depts[0]?.[1].bd;
