@@ -459,3 +459,12 @@ table.sheet tr.tot td:first-child{background:var(--panel-2)}
 .term .tvar{white-space:nowrap;max-width:100%}
 .term .tvar small::before{content:"· ";opacity:.7}
 @media (max-width:520px){.term .tvar .w{display:none}}
+/* Terminal tile flag, v2: corner icon + one text line; tiles stay the same height */
+.term{position:relative}
+.term .id{padding-right:30px}
+.term .tflag{position:absolute;top:10px;right:10px;width:26px;height:26px;border-radius:50%;display:grid;place-items:center}
+.term .tflag.over{background:var(--over-soft);color:var(--over)}.term .tflag.under{background:var(--under-soft);color:var(--under)}
+.term .tvar{display:block;padding:0;border-radius:0;background:none!important;font-size:13.5px;font-weight:800;white-space:normal;line-height:1.3;min-height:1.3em}
+.term .tvar small{font-weight:600;font-size:12px;opacity:.85}
+.term .tvar small::before{content:none}
+.term.has-var{box-shadow:inset 0 0 0 1px var(--line-2)}
