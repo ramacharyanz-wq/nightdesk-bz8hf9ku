@@ -203,8 +203,8 @@ const Engine = (() => {
       const st = r.status || '', cur = num(r['Curr.amount']), orig = num(r['Orig.amount']);
       const key = rowKey(r), dept = moves[key] || home;
       const a = (st === 'SALE AUTHORISED' && !isNaN(orig) && orig > cur) ? orig : cur; // refunded sale: count what was charged
-      const row = { side: 'T', key, home, dept, org: label(r, home), term: r.terminal_id, tn: (tinfo && tinfo.name) || "Terminal " + r.terminal_id, date: r.created_at_date, time: (r.created_at_time || '').slice(0, 5),
-        card: r.Product, type: cardType(r.Product), l4: String(r['card.last_four'] || '').padStart(4, '0'), bin: r['card.bin'], rrn: r.RRN, batch: r.batch_id, orig, status: st, amt: a, grat: num(r.Gratuity_amount) || 0, mid: r.merchant_id, entry: r.entry_mode || '' };
+      const row = { side: 'T', key, home, dept, org: label(r, home), term: r.terminal_id, tn: (tinfo && tinfo.name) || (defaultDept(r) === 'F&B' && r['organisation.name'] ? r['organisation.name'].trim() + ' ' + r.terminal_id : "Terminal " + r.terminal_id), date: r.created_at_date, time: (r.created_at_time || '').slice(0, 5),
+        card: r.Product, type: cardType(r.Product), l4: String(r['card.last_four'] || '').padStart(4, '0'), bin: r['card.bin'], rrn: r.RRN, batch: r.batch_id, orig, status: st, amt: a, grat: num(r.Gratuity_amount) || 0, mid: r.merchant_id, entry: r.technology || r.entry_mode || '' };
       const counts = st === 'SALE AUTHORISED' || st === 'PREAUTH_COMPLETION AUTHORISED' || st === 'REFUND AUTHORISED';
       const isComp = st === 'PREAUTH_COMPLETION AUTHORISED';
       // Filter by the terminal's own department; if that D140 isn't loaded, use the other one's date.
