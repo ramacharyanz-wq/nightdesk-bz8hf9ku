@@ -38,7 +38,7 @@
   setThemeIcon();
 
   /* ---------- state ---------- */
-  const S = { csv: [], pdf: { FO: null, 'F&B': null }, err: {}, res: null, sel: 'FO', tab: null, busy: {},
+  const S = { csv: [], pdf: { FO: null, 'F&B': null }, more: [], err: {}, res: null, sel: 'FO', tab: null, busy: {},
     opts: store.get('cr-opts', { basis: 'batch', batch: 'auto', dupOnce: true }), merch: store.get("cr-merch", {}), names: Engine.withBuiltIn(store.get("cr-terms", [])), cashiers: store.get("cr-cashiers", {}) };
 
   function toast(t) { const d = document.createElement('div'); d.className = 'toast'; d.textContent = t; document.body.appendChild(d); setTimeout(() => d.remove(), 2400); }
@@ -73,14 +73,27 @@
           const buf = await f.arrayBuffer(), keep = buf.slice(0); // pdf.js takes over its copy; keep one to show pages
           const pl = await Engine.pdfLines(buf);
           const p = Engine.parseD140(pl.lines, pl.pages, f.name, pl.geo, pl.sizes);
-          S.pdf[p.dept] = { name: f.name, ...p, buf: keep }; delete S.err[p.dept];
-          if (hint && hint !== p.dept) toast(`Moved to ${p.dept === 'FO' ? 'Front Office' : 'F&B'}: that's a ${p.dept} D140`);
+          const where = placePdf({ name: f.name, ...p, buf: keep });
+          if (where === 'later') toast(`${fmtDate(p.bdate, { day: 'numeric', month: 'short' })} D140 added to confirm what was posted or completed later`);
+          else if (hint && hint !== p.dept) toast(`Moved to ${p.dept === 'FO' ? 'Front Office' : 'F&B'}: that's a ${p.dept} D140`);
         } catch (e) { S.err[slot] = f.name + ': no D140 postings found'; }
         S.busy[slot] = false;
       }
     }
     run();
   }
+  // Audit done a few days late: the earliest D140 of a department is the one audited. A D140 of a later
+  // day is kept in S.more and only used to confirm items posted, reversed or completed afterwards.
+  function placePdf(p) {
+    S.more = S.more.filter(x => x.name !== p.name); delete S.err[p.dept];
+    const cur = S.pdf[p.dept];
+    if (cur && cur.name !== p.name && cur.bdate !== p.bdate) {
+      if (p.bdate > cur.bdate) { S.more.push(p); return 'later'; }
+      S.more.push(cur);
+    }
+    S.pdf[p.dept] = p; return 'main';
+  }
+  const allPdfs = () => [...Object.values(S.pdf).filter(Boolean), ...S.more];
   function bindSlot(id, input, hint) {
     const el = $(id);
     ['dragenter', 'dragover'].forEach(e => el.addEventListener(e, ev => { ev.preventDefault(); ev.stopPropagation(); el.classList.add('over'); }));
@@ -107,15 +120,18 @@
       el.querySelector('.s:not(.file)').textContent = sub;
       let x = el.querySelector('.x');
       if (filled && !x) { x = document.createElement('button'); x.className = 'x'; x.type = 'button'; x.setAttribute('aria-label', 'Remove'); x.innerHTML = ic.x(16); el.appendChild(x);
-        x.addEventListener('click', ev => { ev.preventDefault(); ev.stopPropagation(); if (id === '#slot-csv') S.csv = []; else S.pdf[id === '#slot-FO' ? 'FO' : 'F&B'] = null; run(); }); }
+        x.addEventListener('click', ev => { ev.preventDefault(); ev.stopPropagation(); if (id === '#slot-csv') S.csv = []; else { const d = id === '#slot-FO' ? 'FO' : 'F&B'; S.pdf[d] = null; S.more = S.more.filter(x => x.dept !== d); } run(); }); }
       if (!filled && x) x.remove();
     };
     const rows = S.csv.reduce((a, f) => a + f.rows.length, 0);
     set('#slot-csv', { filled: S.csv.length, err: S.err.csv, busy: S.busy.csv, icon: ic.grid(22), file: !S.err.csv && S.csv.length ? S.csv.map(f => f.name).join(', ') : '', sub: S.err.csv || (S.csv.length ? `${rows} row${rows === 1 ? "" : "s"}` : "CSV") });
+    const audit = allPdfs().map(p => p.bdate).sort()[0], sd = b => fmtDate(b, { day: 'numeric', month: 'short' });
     for (const [d, id] of [['FO', '#slot-FO'], ['F&B', '#slot-FB']]) {
-      const p = S.pdf[d];
-      set(id, { filled: p, err: S.err[d] || (p && !p.grandOk), busy: S.busy[d], icon: ic.doc(22), file: !S.err[d] && p ? p.name : '',
-        sub: S.err[d] || (p ? `${p.rows.length} postings · ${money(p.total)}${p.grandOk ? '' : ' · Grand Total differs'}` : 'PDF') });
+      const p = S.pdf[d], more = S.more.filter(x => x.dept === d).sort((a, b) => a.bdate.localeCompare(b.bdate));
+      const plus = more.length ? ` · + ${more.map(x => sd(x.bdate)).join(', ')} to confirm` : '';
+      const files = p ? [p, ...more].map(x => x.name).join(', ') : '';
+      set(id, { filled: p, err: S.err[d] || (p && !p.grandOk), busy: S.busy[d], icon: ic.doc(22), file: !S.err[d] && p ? files : '',
+        sub: S.err[d] || (p ? (p.bdate > audit ? `${sd(p.bdate)} · only confirms ${sd(audit)} items` : `${p.rows.length} postings · ${money(p.total)}${p.grandOk ? '' : ' · Grand Total differs'}${plus}`) : 'PDF') });
     }
   }
 
@@ -124,7 +140,7 @@
   let printSeq = 0;
   function run() {
     renderSlots();
-    const pdfs = Object.values(S.pdf).filter(Boolean);
+    const pdfs = allPdfs();
     if (!S.csv.length || !pdfs.length) { S.res = null; renderAll(); return; }
     try { S.res = Engine.reconcile({ csvFiles: S.csv, pdfFiles: pdfs, merch: mapping(), names: S.names, cashiers: S.cashiers, ...S.opts }); }
     catch (e) { S.res = null; toast('Could not reconcile: ' + e.message); }
@@ -140,7 +156,7 @@
   const fmtDate = (bd, o) => bd ? new Date(bd + 'T12:00:00').toLocaleDateString('en-NZ', o || { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }) : '';
   function receipt(dept, r, print) {
     if (!r || r.skip) return `<div class="printer ghost"><div class="mouth"></div><div class="feed"><div class="receipt"><div class="c h1">${esc(deptName(dept).toUpperCase())}</div><div class="c h2">${r?.skip ? 'NO D140 LOADED' : 'WAITING'}</div><div class="rule"></div><div class="ln"><span>TERMINALS</span><span>—</span></div><div class="ln"><span>OPERA D140</span><span>—</span></div><div class="rule"></div><div class="ln big"><span>VARIANCE</span><span>—</span></div><div class="stampwrap"></div><div class="bar"></div></div></div></div>`;
-    const nil = cents(r.variance) === 0, fix = r.ex.filter(e => e.kind !== 'dup' && e.kind !== 'missing').length;
+    const nil = cents(r.variance) === 0, fix = r.ex.filter(e => e.kind !== 'dup' && e.kind !== 'missing' && !e.settled).length, late = (r.followUp || []).length, cl = r.completedLater || [];
     return `<div class="printer ${S.sel === dept ? 'sel' : ''}" data-dept="${esc(dept)}"><div class="mouth"></div><div class="feed"><div class="receipt ${print ? 'print' : ''}" role="button" tabindex="0" aria-label="${esc(deptName(dept))} details">
       <div class="c h1">${esc(deptName(dept).toUpperCase())}</div>
       <div class="c h2">${esc(fmtDate(r.bd).toUpperCase())}${r.tBatch ? '<br>BATCH ' + esc(r.tBatch) : ''}</div>
@@ -149,6 +165,8 @@
       <div class="ln"><span>OPERA D140</span><span>${plain(r.dTot)}</span></div>
       <div class="rule"></div>
       <div class="ln big"><span>VARIANCE</span><span class="v-${vc(r.variance)}">${plain(r.variance)}</span></div>
+      ${late && cents(r.cleared) ? `<div class="ln"><span>POSTED LATER</span><span>${plain(r.cleared)}</span></div><div class="ln"><span>STILL OPEN</span><span class="v-${vc(r.variance - r.cleared)}">${plain(r.variance - r.cleared)}</span></div>` : ''}
+      ${cl.length ? `<div class="ln"><span>DONE AFTER DATE</span><span>${late ? cl.filter(y => y.confirm).length + '/' : ''}${cl.length}</span></div>` : ''}
       ${r.checkable !== null ? `<div class="ln"><span>CHECKABLE</span><span>${plain(r.checkable)}</span></div>` : ''}
       <div class="rule"></div>
       <div class="ln"><span>TO FIX</span><span>${fix}</span></div>
@@ -156,7 +174,8 @@
       ${(r.crossIn || []).length + (r.crossOut || []).length ? `<div class="ln"><span>OTHER DEPT TERM.</span><span>${r.crossIn.length + r.crossOut.length}</span></div>` : ''}
       ${(r.checks || []).length ? `<div class="ln"><span>CHECK THESE</span><span>${r.checks.length}</span></div>` : ''}
       <div class="ln"><span>MATCHED</span><span>${r.matches.length}</span></div>
-      <div class="stampwrap"><div class="stamp ${vc(r.variance)}">${nil ? 'BALANCED' + ((r.checks || []).length ? `<small>${r.checks.length} TO CHECK</small>` : '') : 'OUT<small>' + esc(money(r.variance, true)) + '</small>'}</div></div>
+      ${r.trust && !r.trust.ok ? `<div class="ln"><span>FILES CHECK</span><span class="v-under">FAILED</span></div>` : ''}
+      <div class="stampwrap"><div class="stamp ${r.trust && !r.trust.ok ? 'under' : vc(r.variance)}">${r.trust && !r.trust.ok ? 'CHECK FILES<small>NOT RELIABLE</small>' : nil ? 'BALANCED' + ((r.checks || []).length ? `<small>${r.checks.length} TO CHECK</small>` : '') : 'OUT<small>' + esc(money(r.variance, true)) + '</small>'}</div></div>
       <div class="bar"></div>
     </div></div></div>`;
   }
@@ -177,13 +196,15 @@
   }
 
   /* ---------- detail ---------- */
-  const KIND = { terminal: 'Not in Opera', double: 'Double charge', opera: 'Not on terminal', declined: 'Declined on terminal', missing: 'Not in export', dup: 'Shown twice', tip: 'Tip not in Opera' };
+  const KIND = { terminal: 'Not in Opera', double: 'Double charge', opera: 'Not on terminal', declined: 'Declined on terminal', missing: 'Not in export', dup: 'Shown twice', tip: 'Tip not in Opera', prior: 'Posted a day late', amount: 'Wrong amount', correction: 'Correction' };
+  // An item that a later D140 shows was posted (or reversed) afterwards.
+  const kindOf = e => e.late ? (e.kind === 'amount' ? 'Corrected later' : e.row.side === 'T' ? 'Posted late' : 'Reversed later') : KIND[e.kind];
   function fixCard(e) {
-    const x = e.row, T = x.side === 'T', P = e.pair; // P: the Opera posting a tip charge matched
+    const x = e.row, T = x.side === 'T', P = e.pair || (T ? e.late : null); // P: the Opera posting a tip charge (or a late posting) matched
     const term = T ? `<div class="loc">${ic.pos(18)}<div><div class="k">${esc(x.tn || "Terminal " + x.term)}</div><div class="v">${esc(x.time)} · ${esc(x.type)} ••${esc(x.l4)} · RRN ${esc(x.rrn)}</div></div></div>` : `<div class="loc none">${ic.pos(18)}<div>No terminal transaction</div></div>`;
     const dx = T ? P : x;
     const d140 = dx ? `<div class="loc">${ic.page(18)}<div><div class="k">D140 page ${esc(dx.page)} · Room ${esc(dx.room)}${P ? ' · ' + esc(money(dx.amt)) : ''}</div><div class="v">${esc(dx.name)}${dx.receipt ? ' · #' + esc(dx.receipt) : ''}${dx.ref ? ' · check ' + esc(dx.ref) : ''} · ${esc(dx.code)} ${esc(Engine.codeType(dx.code))}${dx.by ? ' · by ' + esc(dx.by) : ''}</div></div></div>` : `<div class="loc none">${ic.page(18)}<div>Not in the D140</div></div>`;
-    return `<article class="fix k-${e.kind}${e.kind === "dup" ? "" : " v-" + vc(e.effect)}"><div class="top"><span class="badge b-${e.kind}${e.kind === "dup" || !cents(e.effect) ? "" : " b-" + vc(e.effect)}">${esc(KIND[e.kind])}</span><div class="amt"><b class="num">${money(x.amt)}</b><small class="${e.kind === "dup" ? "" : "v-" + vc(e.effect)}">${e.kind === "dup" ? "counted once" : "variance " + money(e.effect, true)}</small></div></div>${term}${d140}<div class="hint">${esc(e.hint)}</div></article>`;
+    return `<article class="fix k-${e.kind}${e.kind === "dup" ? "" : " v-" + vc(e.effect)}"><div class="top"><span class="badge b-${e.settled ? 'check' : e.kind}${e.settled || e.kind === "dup" || !cents(e.effect) ? "" : " b-" + vc(e.effect)}">${esc(kindOf(e))}</span><div class="amt"><b class="num">${money(x.amt)}</b><small class="${e.kind === "dup" ? "" : "v-" + vc(e.effect)}">${e.kind === "dup" ? "counted once" : "variance " + money(e.effect, true)}</small></div></div>${term}${d140}<div class="hint">${esc(e.hint)}</div></article>`;
   }
   // A pair that balances only on amount: show both sides so a person can confirm it.
   function checkCard(m) {
@@ -218,16 +239,18 @@
       <div class="rc-r${h('total')}"><span>Total${tg('total')}</span><span>${$a(y.amt)}</span></div><hr>
       <div class="rc-note">Rebuilt from the terminal export</div></div>`;
   }
+  // To fix tab groups: items to act on, items this export can't check, items a later D140 shows were sorted out.
+  const splitEx = r => ({ fixes: r.ex.filter(e => e.kind !== 'dup' && e.kind !== 'missing' && !e.settled), rest: r.ex.filter(e => (e.kind === 'dup' || e.kind === 'missing') && !e.settled), late: r.ex.filter(e => e.settled) });
   // Every difference on the To fix tab, in the order the cards are shown.
   function dvItems(r) {
     const tone = e => e.kind === 'dup' || !cents(e.effect) ? 'check' : vc(e.effect);
-    const ex = e => { const x = e.row; return { label: KIND[e.kind], tone: tone(e), amt: x.amt, sub: e.kind === 'dup' ? 'counted once' : 'variance ' + money(e.effect, true), hint: e.hint,
-      T: x.side === 'T' ? [x] : [], D: x.side === 'D' ? [x] : e.pair ? [e.pair] : [], hl: e.kind === 'tip' ? 'tip' : 'total', tag: KIND[e.kind] }; };
-    const fixes = r.ex.filter(e => e.kind !== 'dup' && e.kind !== 'missing'), rest = r.ex.filter(e => e.kind === 'dup' || e.kind === 'missing');
-    return [...fixes.map(ex), ...(r.checks || []).map(m => ({ label: 'Check', tone: 'check', amt: m.t.reduce((a, y) => a + y.amt, 0), sub: 'balances on amount', hint: m.why + '. Confirm it is the same guest and payment.', T: m.t, D: m.d, hl: 'total', tag: 'Check' })), ...rest.map(ex)];
+    const ex = e => { const x = e.row; return { label: kindOf(e), tone: e.settled ? 'check' : tone(e), amt: x.amt, sub: e.kind === 'dup' ? 'counted once' : 'variance ' + money(e.effect, true), hint: e.hint,
+      T: x.side === 'T' ? [x] : x.prior ? [x.prior] : [], D: x.side === 'D' ? (e.late ? [x, e.late] : e.pairD ? [x, e.pairD] : [x]) : e.pair ? [e.pair] : e.late ? [e.late] : [], hl: e.kind === 'tip' ? 'tip' : 'total', tag: kindOf(e) }; };
+    const { fixes, rest, late } = splitEx(r);
+    return [...fixes.map(ex), ...(r.checks || []).map(m => ({ label: 'Check', tone: 'check', amt: m.t.reduce((a, y) => a + y.amt, 0), sub: 'balances on amount', hint: m.why + '. Confirm it is the same guest and payment.', T: m.t, D: m.d, hl: 'total', tag: 'Check' })), ...rest.map(ex), ...late.map(ex)];
   }
   const dv = { el: null, items: [], i: 0, page: null, full: false, docs: {} };
-  const pdfFor = x => Object.values(S.pdf).find(p => p && p.name === x.file) || null;
+  const pdfFor = x => allPdfs().find(p => p.name === x.file) || null;
   function d140Text(x) { return `<b>${esc(x.date)} ${esc(x.time)}</b> · ${esc(x.code)} ${esc(Engine.codeType(x.code))}${x.l4 ? ' · card ••' + esc(x.l4) : ''} · Room ${esc(x.room)} · ${esc(x.name)}${x.receipt ? ' · #' + esc(x.receipt) : ''}${x.ref ? ' · check ' + esc(x.ref) : ''} · <b>${money(x.amt)}</b>${x.by ? ' · by ' + esc(x.by) : ''}`; }
   function renderDV() {
     const it = dv.items[dv.i], el = dv.el; if (!it) return closeDV();
@@ -311,11 +334,11 @@
     const el = $('#detail'); const r = S.res && S.res[S.sel];
     if (!S.res || !r || r.skip) { el.hidden = true; return; }
     el.hidden = false;
-    const fixes = r.ex.filter(e => e.kind !== 'dup' && e.kind !== 'missing');
-    const checks = r.checks || [], otherNight = r.otherNight || [], nonCard = r.nonCard || [];
+    const { fixes, rest, late } = splitEx(r);
+    const checks = r.checks || [], otherNight = r.otherNight || [], nonCard = r.nonCard || [], doneLater = r.completedLater || [];
     const nFix = fixes.length + checks.length;
     const tabs = [['fix', 'To fix', nFix, nFix ? 'alert' : ''], ['codes', 'Card codes', r.wrong.length, ''], ['sheet', 'Recon sheet', null, ''], ['matched', 'Matched', r.matches.length, '']];
-    if (!S.tab) S.tab = nFix || (r.crossIn || []).length || (r.crossOut || []).length || otherNight.length || nonCard.length ? 'fix' : r.wrong.length ? 'codes' : 'sheet';
+    if (!S.tab) S.tab = nFix || late.length || doneLater.length || (r.crossIn || []).length || (r.crossOut || []).length || otherNight.length || nonCard.length ? 'fix' : r.wrong.length ? 'codes' : 'sheet';
     const types = sheetTypes(r).filter(ty => r.sheet[ty].tt || r.sheet[ty].op);
     const max = Math.max(1, ...types.map(ty => Math.max(Math.abs(r.sheet[ty].tt), Math.abs(r.sheet[ty].op))));
     const bars = types.map(ty => { const o = r.sheet[ty], v = o.tt - o.op;
@@ -329,10 +352,12 @@
 
     let body = '';
     if (S.tab === 'fix') {
-      const rest = r.ex.filter(e => e.kind === 'dup' || e.kind === 'missing');
-      body = fixes.length ? `<div class="fixes">${fixes.map(fixCard).join('')}</div>` : checks.length ? '' : `<div class="nothing">${ic.party(40)}<b>Nothing to fix</b><span>Every posting matches a terminal transaction.</span></div>`;
+      body = fixes.length ? `<div class="fixes">${fixes.map(fixCard).join('')}</div>` : checks.length || late.length ? '' : `<div class="nothing">${ic.party(40)}<b>Nothing to fix</b><span>Every posting matches a terminal transaction.</span></div>`;
       if (checks.length) body += `<h3 style="margin:${fixes.length ? 22 : 0}px 0 4px;font-size:15px">Check these (${checks.length})</h3><p style="margin:0 0 12px;color:var(--muted);font-size:13px">These balance only on amount. They may be fine, or two separate mistakes that cancel out. Look at both sides.</p><div class="fixes">${checks.map(checkCard).join('')}</div>`;
       if (rest.length) body += `<h3 style="margin:22px 0 12px;font-size:15px">Can't be checked with this export (${rest.length})</h3><div class="fixes">${rest.map(fixCard).join('')}</div>`;
+      if (late.length) body += `<h3 style="margin:22px 0 4px;font-size:15px">Explained, nothing to post (${late.length})</h3><p style="margin:0 0 12px;color:var(--muted);font-size:13px">Still a difference on this night's D140, but explained: posted or reversed on another night, or corrected. Nothing to post now.</p><div class="fixes">${late.map(fixCard).join('')}</div>`;
+      if (doneLater.length) { const ok = doneLater.filter(y => y.confirm).length, fu = (r.followUp || []).length;
+        body += `<h3 style="margin:22px 0 4px;font-size:15px">Completed after this date, not counted (${doneLater.length} · ${money(doneLater.reduce((a, y) => a + y.amt, 0))})</h3><p style="margin:0 0 12px;color:var(--muted);font-size:13px">Pre-auths taken on this date whose amount changed when they were completed later, usually at check-out. The export shows them under the pre-auth's date. ${!fu ? 'Load the next day\'s D140 to confirm each one, or check the RRN in the portal.' : ok === doneLater.length ? 'All of them are posted on the later D140. Nothing to do.' : (doneLater.length - ok) + ' not found on the later D140: check the RRN in the portal.'}</p><div class="list">${doneLater.map(y => `<div class="lrow"><span class="g">${esc(y.type)} ••${esc(y.l4)}<small style="display:block;font-weight:500;color:var(--muted);font-size:12px">Pre-auth ${money(y.orig)} → ${money(y.amt)} · RRN ${esc(y.rrn)}</small></span><span class="m room">${esc(y.time)}</span><span class="m pg">${y.confirm ? 'Rm ' + esc(y.confirm.room) : ''}</span><span class="m rc">${y.confirm ? 'p.' + esc(y.confirm.page) : ''}</span><span class="amtc num">${money(y.amt)}</span><span class="move">${y.confirm ? `<span class="chip to">Posted ${esc(fmtDate(y.confirm.bd, { day: 'numeric', month: 'short' }))} ${esc(y.confirm.time)}</span><span class="m">${esc(y.confirm.name)}${y.confirm.by ? ' · by ' + esc(y.confirm.by) : ''}</span>` : `<span class="chip from" style="text-decoration:none">${fu ? 'Not on later D140' : 'To confirm'}</span><span class="m">${esc(y.tn)}</span>`}</span></div>`).join('')}</div>`; }
       if (otherNight.length) body += `<h3 style="margin:22px 0 4px;font-size:15px">From another night, not counted (${otherNight.length})</h3><p style="margin:0 0 12px;color:var(--muted);font-size:13px">Completions in this export from a different batch that match nothing in tonight's D140.</p><div class="list">${otherNight.map(y => `<div class="lrow"><span class="g">${esc(y.type)} ••${esc(y.l4)}</span><span class="m room">Batch ${esc(y.batch || '')}</span><span class="m pg">${esc(y.date || '')}</span><span class="m rc">${esc(y.time)}</span><span class="amtc num">${money(y.amt)}</span><span class="move"><span class="chip to">${esc(y.tn)}</span></span></div>`).join('')}</div>`;
       if (nonCard.length) body += `<h3 style="margin:22px 0 4px;font-size:15px">Not card payments, not checked (${nonCard.length})</h3><div class="list">${nonCard.map(x => `<div class="lrow"><span class="g">${esc(x.name)}${x.by ? " · by " + esc(x.by) : ""}</span><span class="m room">Rm ${esc(x.room)}</span><span class="m pg">p.${esc(x.page)}</span><span class="m rc">${esc(x.code)}</span><span class="amtc num">${money(x.amt)}</span><span class="move"></span></div>`).join('')}</div>`;
       const xi = r.crossIn || [], xo = r.crossOut || [];
@@ -381,14 +406,19 @@
   /* ---------- banners / date ---------- */
   function renderBanners() {
     const b = [];
-    for (const d of ['FO', 'F&B']) { const p = S.pdf[d]; if (p && !p.grandOk) b.push(`<div class="banner bad">${ic.alert(18)}<span>${deptName(d)} D140: postings add to ${money(p.total)} but the Grand Total says ${money(p.grand)}. Some lines may not have been read.</span></div>`); }
-    const r = S.res && S.res[S.sel]; if (r && r.warn) b.push(`<div class="banner">${ic.alert(18)}<span>${esc(r.warn)}</span></div>`);
+    for (const p of allPdfs()) { const d = p.dept; if (p && !p.grandOk) b.push(`<div class="banner bad">${ic.alert(18)}<span>${deptName(d)} D140 ${esc(fmtDate(p.bdate, { day: 'numeric', month: 'short' }))}: postings add to ${money(p.total)} but the Grand Total says ${money(p.grand)}. Some lines may not have been read.</span></div>`); }
+    const r = S.res && S.res[S.sel];
+    if (r && r.trust && !r.trust.ok) b.push(`<div class="banner bad">${ic.alert(18)}<span><b>This result can't be trusted yet.</b> ${r.trust.reasons.map(esc).join(' ')} Fix the files and load them again before signing off.</span></div>`);
+    if (r && r.warn) b.push(`<div class="banner">${ic.alert(18)}<span>${esc(r.warn)}</span></div>`);
     if (r && !r.skip) { const oth = deptName(S.sel === 'FO' ? 'F&B' : 'FO'), me = deptName(S.sel), sum = l => l.reduce((a, c) => a + c.t.amt, 0);
       if (r.crossIn.length) b.push(`<div class="banner info">${ic.pos(18)}<span>${me} includes ${money(sum(r.crossIn))} (${r.crossIn.length}) charged on ${oth} terminals and posted in ${me} Opera. It is counted here, so it is not a difference. See the To fix tab.</span></div>`);
       if (r.crossOut.length) b.push(`<div class="banner info">${ic.pos(18)}<span>${money(sum(r.crossOut))} (${r.crossOut.length}) charged on ${me} terminals belongs to ${oth} and is counted there. ${me} terminal totals here are lower than the terminal report by this amount.</span></div>`);
       const ck = r.checks || [], on = r.otherNight || [], nc = r.nonCard || [];
       if (ck.length) b.push(`<div class="banner">${ic.alert(18)}<span>${ck.length} ${ck.length === 1 ? 'match balances' : 'matches balance'} only on amount (different cards, or two items against one). Two mistakes can cancel out and look balanced. Check ${ck.length === 1 ? 'it' : 'them'} on the To fix tab.</span></div>`);
-      if (on.length) b.push(`<div class="banner info">${ic.pos(18)}<span>${on.length} completion${on.length === 1 ? '' : 's'} (${money(on.reduce((a, y) => a + y.amt, 0))}) from another night in this export ${on.length === 1 ? 'was' : 'were'} not counted.</span></div>`);
+      const dl = r.completedLater || [];
+      if (dl.length) { const ok = dl.filter(y => y.confirm).length; b.push(`<div class="banner info">${ic.pos(18)}<span>${dl.length} pre-auth${dl.length === 1 ? '' : 's'} from this date ${dl.length === 1 ? 'was' : 'were'} completed later (${money(dl.reduce((a, y) => a + y.amt, 0))}) and ${dl.length === 1 ? 'is' : 'are'} not counted. ${(r.followUp || []).length ? (ok === dl.length ? 'All are posted on the later D140.' : `${ok} of ${dl.length} found on the later D140.`) : 'Load the next day\'s D140 to confirm them.'}</span></div>`); }
+      if (r.followUp && r.followUp.length && cents(r.cleared)) b.push(`<div class="banner info">${ic.page(18)}<span>${money(r.cleared, true)} of tonight's ${money(r.variance, true)} variance was posted or reversed on the ${r.followUp.map(d => esc(fmtDate(d, { day: 'numeric', month: 'short' }))).join(', ')} D140. Still open: ${money(r.variance - r.cleared, true)}.</span></div>`);
+      if (on.length) b.push(`<div class="banner info">${ic.pos(18)}<span>${on.length} completion${on.length === 1 ? '' : 's'} (${money(on.reduce((a, y) => a + y.amt, 0))}) in the loaded export${S.csv.length > 1 ? 's' : ''} belong${on.length === 1 ? 's' : ''} to another night and ${on.length === 1 ? 'was' : 'were'} not counted.</span></div>`);
       if (nc.length) b.push(`<div class="banner info">${ic.page(18)}<span>${nc.length} D140 posting${nc.length === 1 ? '' : 's'} (${money(nc.reduce((a, x) => a + x.amt, 0))}) ${nc.length === 1 ? 'is not a card payment' : 'are not card payments'} (code ${[...new Set(nc.map(x => x.code))].join(', ')}) and ${nc.length === 1 ? 'was' : 'were'} not checked.</span></div>`); }
     $('#banners').innerHTML = b.join('');
     $('#banners').style.display = b.length ? 'grid' : 'none'; $('#banners').style.gap = '10px';
@@ -402,11 +432,11 @@
   function saveHistory() {
     if (!S.res) return; const any = Object.values(S.res).find(r => !r.skip); if (!any) return;
     const h = store.get('cr-history', []).filter(x => x.bd !== any.bd);
-    const sum = r => r && !r.skip ? { v: r.variance, fix: r.ex.filter(e => e.kind !== 'dup' && e.kind !== 'missing').length, codes: r.wrong.length, t: r.tTot, o: r.dTot } : null;
+    const sum = r => r && !r.skip ? { v: r.variance, open: r.variance - (r.cleared || 0), trusted: !r.trust || r.trust.ok, fix: r.ex.filter(e => e.kind !== 'dup' && e.kind !== 'missing' && !e.settled).length, codes: r.wrong.length, t: r.tTot, o: r.dTot } : null;
     h.unshift({ bd: any.bd, at: Date.now(), fo: sum(S.res.FO), fb: sum(S.res['F&B']) });
     store.set('cr-history', h.sort((a, b) => b.bd.localeCompare(a.bd)).slice(0, 120));
   }
-  const vpill = s => !s ? '<span class="pill mute">—</span>' : cents(s.v) === 0 ? '<span class="pill ok">NIL</span>' : `<span class="pill ${vc(s.v)}">${money(s.v, true)}</span>`;
+  const vpill = s => !s ? '<span class="pill mute">—</span>' : s.trusted === false ? '<span class="pill under">CHECK FILES</span>' : cents(s.v) === 0 ? '<span class="pill ok">NIL</span>' : `<span class="pill ${vc(s.v)}">${money(s.v, true)}</span>`;
   function openHistory() {
     const h = store.get('cr-history', []);
     openDrawer('History', h.length ? `<div class="hist">${h.map((x, i) => `<div class="hrow"><div class="d">${esc(fmtDate(x.bd))}<small>FO · F&amp;B</small></div>${vpill(x.fo)}${vpill(x.fb)}<button data-i="${i}" aria-label="Delete">${ic.trash(16)}</button></div>`).join('')}</div>` : `<div class="nothing">${ic.clock(36)}<b>No audits yet</b><span>Each reconciliation is saved here on this device.</span></div>`);
@@ -433,13 +463,13 @@
     $('#o-dup').addEventListener('change', e => { S.opts.dupOnce = e.target.checked; save(); });
     B.querySelectorAll('select[data-k]').forEach(s => s.addEventListener('change', () => { S.merch[s.dataset.k] = s.value; store.set('cr-merch', S.merch); run(); }));
     wireTerms(B); wireCashiers(B);
-    $('#o-clear').addEventListener('click', () => { S.csv = []; S.pdf = { FO: null, 'F&B': null }; S.err = {}; closeDrawer(); run(); });
+    $('#o-clear').addEventListener('click', () => { S.csv = []; S.pdf = { FO: null, 'F&B': null }; S.more = []; S.err = {}; closeDrawer(); run(); });
   }
 
   // Cashier names for the Cash ID on each D140 line. Saved on this device only.
   function cashierSection() {
     const seen = {};
-    for (const p of Object.values(S.pdf)) if (p) for (const r of p.rows) if (r.cashier) { const c = seen[r.cashier] = seen[r.cashier] || { id: r.cashier, users: new Set(), n: 0, depts: new Set() }; if (r.user) c.users.add(r.user); c.n++; c.depts.add(r.dept); }
+    for (const p of allPdfs()) for (const r of p.rows) if (r.cashier) { const c = seen[r.cashier] = seen[r.cashier] || { id: r.cashier, users: new Set(), n: 0, depts: new Set() }; if (r.user) c.users.add(r.user); c.n++; c.depts.add(r.dept); }
     const ids = Object.keys(seen).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
     const rest = Object.keys(S.cashiers).filter(id => !seen[id]).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
     const row = (id, sub) => `<div class="mrow trow crow" data-id="${esc(id)}"><div><input class="cname" value="${esc(S.cashiers[id] || '')}" placeholder="Name for cashier ${esc(id)}" aria-label="Name for cashier ${esc(id)}"><div class="s">${sub}</div></div><div class="s" style="text-align:right;font-weight:700">#${esc(id)}</div></div>`;

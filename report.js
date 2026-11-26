@@ -5,7 +5,9 @@ const Report = (() => {
   const pn = n => Math.abs(n) < 0.005 ? '' : (n < 0 ? '-' : '') + Math.abs(n).toLocaleString('en-NZ', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const pn0 = n => Math.abs(n) < 0.005 ? '0.00' : (n < 0 ? '-' : '') + Math.abs(n).toLocaleString('en-NZ', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const cents = n => Math.round(n * 100);
-  const KIND = { terminal: 'On terminal, not in Opera', double: 'Double charge', opera: 'In Opera, not on terminal', declined: 'Declined on terminal', missing: 'Not in export (cannot check)', tip: 'Tip not in Opera', dup: 'Shown twice in export' };
+  const KIND = { terminal: 'On terminal, not in Opera', double: 'Double charge', opera: 'In Opera, not on terminal', declined: 'Declined on terminal', missing: 'Not in export (cannot check)', tip: 'Tip not in Opera', dup: 'Shown twice in export', prior: 'Posted a day late', amount: 'Wrong amount (same card, same time)', correction: 'Correction in Opera' };
+  const kindOf = e => e.late ? (e.kind === 'amount' ? 'Corrected later (later D140)' : e.row.side === 'T' ? 'Posted late (later D140)' : 'Reversed later (later D140)') : KIND[e.kind];
+  const sd = b => b ? new Date(b + 'T12:00:00').toLocaleDateString('en-NZ', { day: 'numeric', month: 'short' }) : '';
 
   // Logo: two overlapping rounded squares, the matched area in amber.
   function logo(doc, x, y, s, NAVY, AMB) {
@@ -47,14 +49,16 @@ const Report = (() => {
       doc.setFillColor(...SOFT); doc.roundedRect(x, top, cw, ch, 8, 8, 'F');
       doc.setFillColor(...vcol(r.variance)); doc.roundedRect(x, top, 6, ch, 3, 3, 'F'); doc.rect(x + 3, top, 3, ch, 'F');
       doc.setFont('helvetica', 'bold'); doc.setFontSize(14); doc.setTextColor(...INK); doc.text(dept === 'FO' ? 'Front Office' : 'Food & Beverage', x + 22, top + 30);
-      const pill = nil ? 'BALANCED' : 'OUT ' + pm(r.variance); doc.setFontSize(8.5); const pw = doc.getTextWidth(pill) + 20;
-      doc.setFillColor(...vsoft(r.variance)); doc.roundedRect(x + cw - 18 - pw, top + 16, pw, 19, 9.5, 9.5, 'F'); doc.setTextColor(...vcol(r.variance)); doc.text(pill, x + cw - 18 - pw / 2, top + 28.5, { align: 'center' });
+      const bad = r.trust && !r.trust.ok, pill = bad ? 'NOT RELIABLE - CHECK FILES' : nil ? 'BALANCED' : 'OUT ' + pm(r.variance); doc.setFontSize(8.5); const pw = doc.getTextWidth(pill) + 20;
+      doc.setFillColor(...(bad ? REDS : vsoft(r.variance))); doc.roundedRect(x + cw - 18 - pw, top + 16, pw, 19, 9.5, 9.5, 'F'); doc.setTextColor(...(bad ? RED : vcol(r.variance))); doc.text(pill, x + cw - 18 - pw / 2, top + 28.5, { align: 'center' });
       const fw = (cw - 40) / 3;
       const fig = (k, v, cx, col) => { doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(...MUTE); doc.text(k, cx, top + 60); doc.setFont('helvetica', 'bold'); doc.setFontSize(15); doc.setTextColor(...(col || INK)); doc.text(v, cx, top + 80); };
       fig('Terminals', pm(r.tTot), x + 22); fig('Opera D140', pm(r.dTot), x + 22 + fw); fig('Variance', nil ? '0.00' : pm(r.variance), x + 22 + 2 * fw, vcol(r.variance));
       doc.setDrawColor(...LINE); doc.setLineWidth(0.8); doc.line(x + 22, top + 96, x + cw - 18, top + 96);
-      const fix = r.ex.filter(e => e.kind !== 'dup' && e.kind !== 'missing').length;
+      const fix = r.ex.filter(e => e.kind !== 'dup' && e.kind !== 'missing' && !e.settled).length;
       const nck = (r.checks || []).length; const pts = [`${fix} item${fix === 1 ? '' : 's'} to fix${nck ? `, ${nck} to check (balance on amount only)` : ''}`, `${r.wrong.length} posting${r.wrong.length === 1 ? '' : 's'} on the wrong card code`, `${r.matches.length} matched transactions${(r.crossIn || []).length + (r.crossOut || []).length ? `, ${(r.crossIn || []).length + (r.crossOut || []).length} on the other department's terminal` : ''}`];
+      if ((r.followUp || []).length && cents(r.cleared)) pts.push(`${pm(r.cleared)} posted or reversed later; still open ${pm(r.variance - r.cleared)}`);
+      if ((r.completedLater || []).length) pts.push(`${r.completedLater.length} pre-auths completed after this date, not counted`);
       if (r.checkable !== null) pts.push(`Checkable variance ${pm(r.checkable)} (export incomplete)`);
       doc.setFont('helvetica', 'normal'); doc.setFontSize(9.2); doc.setTextColor(...INK);
       pts.forEach((t, j) => { const py = top + 114 + j * 14; doc.setFillColor(...AMB); doc.circle(x + 26, py - 3, 2, 'F'); doc.text(clean(t), x + 34, py); });
@@ -73,6 +77,7 @@ const Report = (() => {
       doc.setFont('helvetica', 'normal'); doc.setFontSize(9.5); doc.setTextColor(...MUTE);
       doc.text(clean(`Terminals ${pm(r.tTot)}    Opera D140 ${pm(r.dTot)}    Variance ${cents(r.variance) === 0 ? 'NIL' : pm(r.variance)}`), M, y + 16);
       y += 38;
+      if (r.trust && !r.trust.ok) { doc.setFontSize(8.5); const ls = doc.splitTextToSize(clean("This result can't be trusted yet. " + r.trust.reasons.join(' ')), W - 2 * M - 24); const bh = ls.length * 11 + 14; doc.setFillColor(...REDS); doc.roundedRect(M, y - 10, W - 2 * M, bh, 4, 4, 'F'); doc.setTextColor(...RED); doc.text(ls, M + 12, y + 2); y += bh + 14; }
       if (r.warn) { doc.setFontSize(8.5); const ls = doc.splitTextToSize(clean(r.warn), W - 2 * M - 24); const bh = ls.length * 11 + 14; doc.setFillColor(255, 236, 224); doc.roundedRect(M, y - 10, W - 2 * M, bh, 4, 4, 'F'); doc.setTextColor(...ORG); doc.text(ls, M + 12, y + 2); y += bh + 14; }
       y = h2('Recon sheet', y) + 4;
       const types = Object.keys(r.sheet).filter(ty => ['EFTPOS', 'MC', 'VISA', 'Union Pay', 'Amex', 'AliPay & WeChat', 'JCB'].includes(ty) || r.sheet[ty].tt || r.sheet[ty].op);
@@ -83,15 +88,20 @@ const Report = (() => {
         didParseCell: d => { if (d.section !== 'body') return; if (d.row.index === body.length - 1) { d.cell.styles.fontStyle = 'bold'; d.cell.styles.fillColor = SOFT; } if (d.column.index === nc - 1 && d.cell.raw !== "0.00") { const rv = d.row.index === body.length - 1 ? r.variance : r.sheet[types[d.row.index]].tt - r.sheet[types[d.row.index]].op; d.cell.styles.textColor = vcol(rv); d.cell.styles.fontStyle = 'bold'; } } });
       if (r.wrong.length) y = note('Card-type differences come from postings on the wrong card code. They cancel out in the total.', y + 14);
       y = need(y + 20, 80);
-      const fixes = r.ex.filter(e => e.kind !== 'dup' && e.kind !== 'missing'), rest = r.ex.filter(e => e.kind === 'dup' || e.kind === 'missing');
+      const fixes = r.ex.filter(e => e.kind !== 'dup' && e.kind !== 'missing' && !e.settled), rest = r.ex.filter(e => (e.kind === 'dup' || e.kind === 'missing') && !e.settled), late = r.ex.filter(e => e.settled);
       const exTable = (list, y) => table({ startY: y, head: [['#', 'What', 'Amount', 'Effect', 'Terminal', 'D140', 'Action']],
-        body: list.map((e, i) => { const x = e.row, T = x.side === 'T'; return [i + 1, KIND[e.kind], pm(x.amt), e.kind === 'dup' ? 'none' : pm(e.effect),
-          T ? clean(`${x.tn || x.term}\n${x.time}  ${x.type} ..${x.l4}\nRRN ${x.rrn}`) : '-', T ? (e.pair ? clean(`Page ${e.pair.page}  Room ${e.pair.room}\n${e.pair.name}\nPosted ${e.pair.amt.toFixed(2)}${e.pair.by ? ' by ' + e.pair.by : ''}`) : '-') : clean(`Page ${x.page}  Room ${x.room}\n${x.name}${x.receipt ? '\n#' + x.receipt : ''}\n${x.code} ${Engine.codeType(x.code)}${x.by ? '\nby ' + x.by : ''}`), clean(e.hint)]; }),
+        body: list.map((e, i) => { const x = e.row, T = x.side === 'T'; const P = e.pair || (T ? e.late : null); return [i + 1, kindOf(e), pm(x.amt), e.kind === 'dup' ? 'none' : pm(e.effect),
+          T ? clean(`${x.tn || x.term}\n${x.time}  ${x.type} ..${x.l4}\nRRN ${x.rrn}`) : '-', T ? (P ? clean(`${P.bd ? sd(P.bd) + ' D140  ' : ''}Page ${P.page}  Room ${P.room}\n${P.name}\nPosted ${P.amt.toFixed(2)}${P.by ? ' by ' + P.by : ''}`) : '-') : clean(`Page ${x.page}  Room ${x.room}\n${x.name}${x.receipt ? '\n#' + x.receipt : ''}\n${x.code} ${Engine.codeType(x.code)}${x.by ? '\nby ' + x.by : ''}`), clean(e.hint)]; }),
         columnStyles: { 0: { cellWidth: 20, halign: 'center' }, 1: { cellWidth: 96, fontStyle: 'bold' }, 2: { cellWidth: 60, halign: 'right' }, 3: { cellWidth: 56, halign: 'right' }, 4: { cellWidth: 128 }, 5: { cellWidth: 140 } },
         didParseCell: d => { if (d.section === 'body' && d.column.index === 1) { const e = list[d.row.index]; d.cell.styles.textColor = e.kind === "dup" || !cents(e.effect) ? MUTE : vcol(e.effect); } if (d.section === "body" && d.column.index === 3) { const e = list[d.row.index]; if (e.kind !== "dup" && cents(e.effect)) { d.cell.styles.textColor = vcol(e.effect); d.cell.styles.fontStyle = "bold"; } } } });
       y = h2(`To fix (${fixes.length})`, y) + 4;
       y = fixes.length ? exTable(fixes, y) : note('Nothing to fix. Every posting matches a terminal transaction.', y + 8);
       if (rest.length) { y = need(y + 20, 80); y = h2(`Cannot be checked with this export (${rest.length})`, y) + 4; y = exTable(rest, y); }
+      if (late.length) { y = need(y + 20, 80); y = h2(`Explained, nothing to post (${late.length})`, y) + 4; y = note('Still a difference on this night\'s D140, but explained: posted or reversed on another night, or corrected. Nothing to post now.', y + 8) - 2; y = exTable(late, y); }
+      const dl = r.completedLater || [];
+      if (dl.length) { y = need(y + 20, 80); y = h2(`Completed after this date, not counted (${dl.length}, ${pm(dl.reduce((a, t) => a + t.amt, 0))})`, y) + 4;
+        y = note('Pre-auths taken on this date whose amount changed when they were completed later, usually at check-out. The export shows them under the pre-auth\'s date.' + ((r.followUp || []).length ? '' : ' Confirm each on the next D140 or by RRN in the portal.'), y + 8) - 2;
+        y = table({ startY: y, head: [['Terminal', 'Time', 'Card', 'RRN', 'Pre-auth', 'Completed', 'Later D140']], body: dl.map(t => [clean(t.tn), t.time, clean(`${t.type} ..${t.l4}`), t.rrn || '', pm(t.orig), pm(t.amt), t.confirm ? clean(`Posted ${sd(t.confirm.bd)} ${t.confirm.time}  Room ${t.confirm.room}  ${t.confirm.name}`) : 'To confirm']), columnStyles: { 4: { halign: 'right' }, 5: { halign: 'right', fontStyle: 'bold' } } }); }
       const ck = r.checks || [];
       if (ck.length) {
         y = need(y + 20, 80); y = h2(`Check these (${ck.length})`, y) + 4;

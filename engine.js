@@ -2,6 +2,8 @@
 const Engine = (() => {
   const num = s => parseFloat(String(s ?? '').replace(/[\s,$]/g, ''));
   const cents = n => Math.round(n * 100);
+  const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const fmtD = s => { const m = String(s || '').match(/(\d{4})-(\d\d)-(\d\d)/); return m ? `${+m[3]} ${MON[+m[2] - 1]}` : String(s || ''); };
   const mins = t => { const m = String(t || '').match(/(\d{1,2}):(\d{2})/); return m ? (+m[1]) * 60 + (+m[2]) : 0; };
 
   /* ---------- CSV ---------- */
@@ -88,7 +90,7 @@ const Engine = (() => {
   /* ---------- terminal rows ---------- */
   function termRows(csvFiles) {
     const seen = new Set(), all = [];
-    for (const f of csvFiles) for (const r of f.rows) { const k = rowKey(r); if (seen.has(k)) continue; seen.add(k); all.push(r); }
+    for (const f of csvFiles) for (const r of f.rows) { const k = rowKey(r); if (seen.has(k)) continue; seen.add(k); all.push(Object.assign({}, r, { __file: f.name })); }
     return all;
   }
   // One key per transaction. Rows without an RRN (some wallet payments) are told apart by their details,
@@ -180,9 +182,16 @@ const Engine = (() => {
     // Only card payment codes are checked against terminals. Bank transfers (xxx11) are left out quietly;
     // any other non-card code is left out and listed.
     const D = { FO: [], 'F&B': [] }, nonCard = { FO: [], 'F&B': [] };
+    // A department's audit date is its earliest D140. D140s of later days (loaded when the audit is done
+    // a few days late) are not reconciled; they only confirm items that were posted or completed afterwards.
+    const fdate = f => f.bdate || '', mainDate = {}, F = { FO: [], 'F&B': [] };
+    // One audit date for the whole run: the earliest D140 loaded. A department whose only D140 is later has nothing to audit.
+    const auditDate = pdfFiles.map(fdate).filter(Boolean).sort()[0] || "";
+    for (const dep of ["FO", "F&B"]) mainDate[dep] = auditDate;
     for (const f of pdfFiles) for (const r of f.rows) {
-      const sfx = String(r.code).slice(-2);
-      if (Object.values(SUF).includes(sfx)) D[r.dept].push({ ...r, by: by(r) }); else if (sfx !== '11') nonCard[r.dept].push({ ...r, by: by(r) });
+      const sfx = String(r.code).slice(-2), card = Object.values(SUF).includes(sfx);
+      if (fdate(f) !== mainDate[r.dept]) { if (card) F[r.dept].push({ ...r, by: by(r), bd: fdate(f) }); continue; }
+      if (card) D[r.dept].push({ ...r, by: by(r) }); else if (sfx !== '11') nonCard[r.dept].push({ ...r, by: by(r) });
     }
     const bdate = {};
     for (const dept of ['FO', 'F&B']) {
@@ -202,24 +211,32 @@ const Engine = (() => {
     const batchSet = new Set(all.map(r => String(r.batch_id || '')).filter(Boolean));
     const batchFound = b => !!b && batchSet.has(String(b));
 
-    const T = { FO: [], 'F&B': [] }, ignored = { FO: {}, 'F&B': {} }, declined = { FO: [], 'F&B': [] };
+    const T = { FO: [], 'F&B': [] }, ignored = { FO: {}, 'F&B': {} }, declined = { FO: [], 'F&B': [] }, prior = { FO: [], 'F&B': [] };
     for (const r of all) {
       const tinfo = look(r); const home = (tinfo && tinfo.dept) || merch[merchantKey(r)] || defaultDept(r); if (home === "Ignore") continue;
       const st = r.status || '', cur = num(r['Curr.amount']), orig = num(r['Orig.amount']);
       const key = rowKey(r), dept = moves[key] || home;
       const a = (st === 'SALE AUTHORISED' && !isNaN(orig) && orig > cur) ? orig : cur; // refunded sale: count what was charged
-      const row = { side: 'T', key, home, dept, org: label(r, home), term: r.terminal_id, tn: (tinfo && tinfo.name) || (defaultDept(r) === 'F&B' && r['organisation.name'] ? r['organisation.name'].trim() + ' ' + r.terminal_id : "Terminal " + r.terminal_id), date: r.created_at_date, time: (r.created_at_time || '').slice(0, 5),
+      const row = { side: 'T', key, file: r.__file, auth: r.authorisation_code || '', home, dept, org: label(r, home), term: r.terminal_id, tn: (tinfo && tinfo.name) || (defaultDept(r) === 'F&B' && r['organisation.name'] ? r['organisation.name'].trim() + ' ' + r.terminal_id : "Terminal " + r.terminal_id), date: r.created_at_date, time: (r.created_at_time || '').slice(0, 5),
         card: r.Product, type: cardType(r.Product), l4: String(r['card.last_four'] || '').padStart(4, '0'), bin: r['card.bin'], rrn: r.RRN, batch: r.batch_id, orig, status: st, amt: a, grat: num(r.Gratuity_amount) || 0, mid: r.merchant_id, entry: r.technology || r.entry_mode || '' };
       const counts = st === 'SALE AUTHORISED' || st === 'PREAUTH_COMPLETION AUTHORISED' || st === 'REFUND AUTHORISED';
       const isComp = st === 'PREAUTH_COMPLETION AUTHORISED';
       // Filter by the terminal's own department; if that D140 isn't loaded, use the other one's date.
       const tb = tBatch[home] || tBatch.FO || tBatch['F&B'], bdt = bdate[home] || bdate.FO || bdate['F&B'];
       const useBatch = basis === 'batch' && r.batch_id && batchFound(tb);
-      if (counts && !isComp && useBatch && String(r.batch_id) !== tb) { ignored[dept]['Other batch'] = (ignored[dept]['Other batch'] || 0) + 1; continue; }
-      if (counts && !isComp && !useBatch && bdt && row.date && row.date !== bdt) { ignored[dept]['Other date'] = (ignored[dept]['Other date'] || 0) + 1; continue; }
+      // Sales and refunds of another batch/night are not counted. They are kept aside: an Opera posting with no
+      // charge tonight may be one of them, posted a day late.
+      if (counts && !isComp && useBatch && String(r.batch_id) !== tb) { ignored[dept]['Other batch'] = (ignored[dept]['Other batch'] || 0) + 1; if (st === 'REFUND AUTHORISED') row.amt = -a; prior[dept].push(row); continue; }
+      if (counts && !isComp && !useBatch && bdt && row.date && row.date !== bdt) { ignored[dept]['Other date'] = (ignored[dept]['Other date'] || 0) + 1; if (st === 'REFUND AUTHORISED') row.amt = -a; prior[dept].push(row); continue; }
       // A completion from another batch/night (multi-day export). Counted only if it matches an Opera posting on
       // the same card. Not applied to pre-auth-dated exports, where tonight's completions carry older dates.
-      if (isComp && !preauthStyle) row.offBatch = useBatch ? String(r.batch_id) !== tb : !!(bdt && row.date && row.date !== bdt);
+      // A completion whose amount differs from its pre-auth is the pre-auth's own row: it keeps the pre-auth's
+      // date and time, and the money was taken when it was completed, usually at check-out on a later day
+      // (an export pulled a few days after the audit date is full of them). Same rule: counted only on a same-card match.
+      if (isComp && !preauthStyle) {
+        row.later = !isNaN(orig) && cents(orig) !== cents(cur);
+        row.offBatch = (useBatch ? String(r.batch_id) !== tb : !!(bdt && row.date && row.date !== bdt)) || row.later;
+      }
       if (st === 'SALE AUTHORISED' || isComp) T[dept].push(row);
       else if (st === 'REFUND AUTHORISED') { row.amt = -a; T[dept].push(row); }
       else { const k = st.replace(' AUTHORISED', '').replace('_', ' ').toLowerCase(); ignored[dept][k] = (ignored[dept][k] || 0) + 1; if (/DECLINED/.test(st)) declined[dept].push(row); }
@@ -261,8 +278,9 @@ const Engine = (() => {
       };
       pass(true); tipPass(true); pass(false); tipPass(false);
       // Other-night completions left unmatched are not counted; they are listed for information.
-      const otherNight = [...tu].filter(y => y.offBatch);
-      if (otherNight.length) { otherNight.forEach(y => tu.delete(y)); counted = counted.filter(y => !y.offBatch || !otherNight.includes(y)); tTot = counted.reduce((a, r) => a + r.amt, 0); }
+      const offAll = [...tu].filter(y => y.offBatch);
+      if (offAll.length) { offAll.forEach(y => tu.delete(y)); counted = counted.filter(y => !offAll.includes(y)); tTot = counted.reduce((a, r) => a + r.amt, 0); }
+      const otherNight = offAll.filter(y => !y.later), completedLater = offAll.filter(y => y.later);
       const offsets = [];
       for (const x of [...du]) {
         if (!du.has(x) || x.amt <= 0) continue;
@@ -284,26 +302,77 @@ const Engine = (() => {
         for (let i = 0; i < ts.length && !hit; i++) for (let j = i + 1; j < ts.length; j++) if (cents(ts[i].amt) + cents(ts[j].amt) === cents(x.amt)) { hit = [ts[i], ts[j]]; break; }
         if (hit) { matches.push({ d: [x], t: hit, how: 'split' }); hit.forEach(z => tu.delete(z)); du.delete(x); }
       }
+      // Same card, about the same time, amounts a little apart: the posting (or the charge) has the wrong amount.
+      // Shown as one item with the difference, not as "not in Opera" + "not on terminal".
+      const amountPairs = [];
+      for (const y of [...tu]) {
+        if (!(y.amt > 0) || !y.l4) continue;
+        const x = [...du].filter(x => x.amt > 0 && x.l4 === y.l4 && Math.abs(mins(x.time) - mins(y.time)) <= 15 && Math.abs(x.amt - y.amt) <= 0.25 * Math.max(x.amt, y.amt))
+          .sort((a, b) => Math.abs(mins(a.time) - mins(y.time)) - Math.abs(mins(b.time) - mins(y.time)))[0];
+        if (x) { amountPairs.push({ x, y }); tu.delete(y); du.delete(x); }
+      }
       const $ = n => (n < 0 ? '-' : '') + '$' + Math.abs(n).toFixed(2);
       const ex = [];
       for (const y of tu) {
         let kind = 'terminal', hint = 'Charged on the terminal, not posted in Opera.';
         if (cents(y.amt) === 0) hint = '$0.00 sale. Check what should have been charged.';
         else if (y.amt < 0) hint = 'Refunded on the terminal, no refund in Opera.';
-        else { const tw = counted.find(z => z !== y && z.l4 === y.l4 && cents(z.amt) === cents(y.amt)); if (tw) { kind = 'double'; hint = `Same card charged twice (also ${tw.time}, ${tw.tn}). Opera has it once.`; } }
+        else { const tw = counted.find(z => z !== y && z.l4 === y.l4 && cents(z.amt) === cents(y.amt)); if (tw) { kind = 'double'; hint = `Same card charged twice (also ${tw.time}, ${tw.tn}). Opera has it once.` + (y.auth && y.auth === tw.auth ? ` Both have the same authorisation code ${y.auth}, so one payment was probably sent twice. Check in the portal whether both settled, and refund one if they did.` : ' Check with the guest\'s folio; refund one if it was not meant.'); } }
         ex.push({ kind, effect: y.amt, row: y, hint });
       }
-      let unverifiable = 0;
+      let unverifiable = 0; const priorUsed = new Set();
       for (const x of du) {
         const pb = x.by ? ` by ${x.by}` : '';
         let kind = 'opera', hint = x.amt < 0 ? `Refund posted in Opera${pb}, no refund on any terminal.` : `Posted in Opera${pb}, no card transaction found.`;
-        const dec = declined[dept].find(z => Math.abs(cents(z.amt)) === Math.abs(cents(x.amt)));
-        if (dec) { kind = 'declined'; hint = `${x.amt < 0 ? 'Refund' : 'Sale'} declined on ${dec.tn} at ${dec.time}, never approved, but posted in Opera${pb}.`; }
+        // Charged on an earlier night (that night's export is loaded too) and posted in Opera late, tonight.
+        const pc = prior[dept].filter(z => !priorUsed.has(z) && cents(z.amt) === cents(x.amt));
+        const pr = x.l4 ? pc.find(z => z.l4 === x.l4) : (pc.length === 1 ? pc[0] : null);
+        const dec = pr ? null : declined[dept].find(z => Math.abs(cents(z.amt)) === Math.abs(cents(x.amt)) && (!x.l4 || !z.l4 || z.l4 === x.l4));
+        if (pr) { priorUsed.add(pr); kind = 'prior'; hint = `Charged on ${fmtD(pr.date)} (${pr.tn}, ${pr.time}, ${pr.type} ••${pr.l4}), posted in Opera only tonight${pb}. Nothing to post; it is a late posting. It shows as a variance on both nights' D140s.`; x.prior = pr; }
+        else if (dec) { kind = 'declined'; hint = `${x.amt < 0 ? 'Refund' : 'Sale'} declined on ${dec.tn} at ${dec.time}, never approved, but posted in Opera${pb}.`; }
         else if (preauthStyle && dept === 'FO' && x.amt > 0) { kind = "missing"; hint = `Not in this export. Likely a check-out with a pre-auth before ${startTxt}.${x.by ? " Posted by " + x.by + "." : ""}`; unverifiable += x.amt; }
+        if (kind === 'opera' && x.amt > 0 && mins(x.time) < 360) hint += ` Posted at ${x.time}, after midnight: often the previous night's charge posted late.${prior[dept].length ? ' No matching charge in the previous night\'s export either, so check it.' : ' Load the previous night\'s export too to confirm.'}`;
         ex.push({ kind, effect: -x.amt, row: x, hint });
       }
       for (const { x, y } of tips) ex.push({ kind: 'tip', effect: y.amt - x.amt, row: y, pair: x, hint: `Tip of ${$(y.grat)} charged on the terminal. Opera has the bill without it (${$(x.amt)}${x.by ? ', posted by ' + x.by : ''}). Post the tip in Opera.` });
-      for (const y of dupRows) ex.push({ kind: 'dup', effect: 0, row: y, hint: `Export shows this completion twice (also ${y.dupOf.time}, ${y.dupOf.tn}). Counted once.` });
+      for (const { x, y } of amountPairs) {
+        const d = y.amt - x.amt, who = x.by ? ` (posted by ${x.by})` : '';
+        ex.push({ kind: 'amount', effect: d, row: y, pair: x, hint: d > 0
+          ? `Same card ••${y.l4}, same time: charged ${$(y.amt)} on ${y.tn} at ${y.time}, Opera has ${$(x.amt)}${who}. Opera is ${$(d)} short: post the ${$(d)} difference in Opera.`
+          : `Same card ••${y.l4}, same time: charged ${$(y.amt)} on ${y.tn} at ${y.time}, Opera has ${$(x.amt)}${who}. Opera is ${$(-d)} more than the charge: correct the Opera payment to ${$(y.amt)}, or charge the guest the ${$(-d)} still owed.` });
+      }
+      // A completion shown twice: the pre-auth's own row plus the completion row. Listed only when both are in
+      // the same export and the counted one is tonight's (not when one is in another night's export).
+      for (const y of dupRows) { const tw = y.dupOf; if (y.file !== tw.file || (tw.offBatch && !tw.later)) continue; ex.push({ kind: 'dup', effect: 0, row: y, hint: `Export shows this completion twice (also ${tw.time}, ${tw.tn}). Counted once.` }); }
+      // A negative Opera posting re-posted at once for a different amount, same room and cashier: a correction
+      // of a posting that is not on tonight's D140 (an earlier night's).
+      for (const e of ex) {
+        const x = e.row; if (e.kind !== 'opera' || x.side !== 'D' || !(x.amt < 0)) continue;
+        const p = ex.find(f => f !== e && (f.kind === 'opera' || f.kind === 'prior') && f.row.side === 'D' && f.row.amt > 0 && f.row.room === x.room && f.row.cashier === x.cashier && Math.abs(mins(f.row.time) - mins(x.time)) <= 10);
+        if (p) { e.kind = 'correction'; e.pairD = p.row; e.hint = `Correction${x.by ? ' by ' + x.by : ''}: ${$(x.amt)} at ${x.time}, re-posted as ${$(p.row.amt)} at ${p.row.time} (Rm ${x.room}). The ${$(-x.amt)} it reverses is not on tonight's D140, so it was posted on an earlier night. Nothing to post.`; }
+      }
+      // Later D140s (audit done a few days late): find what was posted, reversed or completed afterwards.
+      const fu = F[dept], fuUsed = new Set();
+      const later = (amt, l4) => { const c = fu.filter(z => !fuUsed.has(z) && cents(z.amt) === cents(amt)); const z = l4 ? c.find(z => z.l4 === l4) || (c.length === 1 && !c[0].l4 ? c[0] : null) : (c.length === 1 ? c[0] : null); if (z) fuUsed.add(z); return z; };
+      const onD = z => `${fmtD(z.bd)} ${z.time}${z.by ? ' by ' + z.by : ''} (Rm ${z.room}, ${z.name}, page ${z.page})`;
+      const codeNote = (z, y) => codeType(z.code) !== y.type ? ` It went under ${z.code} ${codeType(z.code)}; it should be ${codeFor(dept, y.type)} ${y.type}.` : '';
+      for (const y of completedLater) { const z = later(y.amt, y.l4); if (z) y.confirm = z; }
+      for (const e of ex) {
+        const x = e.row;
+        if (e.kind === 'terminal' && x.amt > 0) { const z = later(x.amt, x.l4); if (z) { e.late = z; e.hint = `Charged on the terminal, posted in Opera late: ${onD(z)}. Nothing to post now.${codeNote(z, x)}`; } }
+        else if (e.kind === 'amount') {
+          const p = e.pair, rv = fu.find(z => !fuUsed.has(z) && cents(z.amt) === -cents(p.amt) && z.room === p.room);
+          const rp = rv && fu.find(z => z !== rv && !fuUsed.has(z) && cents(z.amt) === cents(x.amt) && z.room === p.room);
+          if (rv && rp) { fuUsed.add(rv); fuUsed.add(rp); e.late = rp; e.hint = `Corrected later: ${$(rv.amt)} and ${$(rp.amt)} posted ${onD(rp)}. Nothing to do now.${codeNote(rp, x)}`; }
+          else if (cents(e.effect) > 0) { const z = later(e.effect, x.l4); if (z) { e.late = z; e.hint = `The ${$(e.effect)} difference was posted later: ${onD(z)}. Nothing to do now.`; } }
+        }
+        else if ((e.kind === 'opera' || e.kind === 'declined') && x.side === 'D') {
+          const z = fu.find(z => !fuUsed.has(z) && cents(z.amt) === -cents(x.amt) && z.room === x.room);
+          if (z) { fuUsed.add(z); e.late = z; e.hint = `Posted in Opera${x.by ? ' by ' + x.by : ''} with no card charge, then reversed: ${onD(z)}. Nothing to do now.`; }
+        }
+      }
+      // Explained, nothing to post: posted or reversed on a later D140, a day-late posting, or a correction.
+      for (const e of ex) if (e.late || e.kind === 'prior' || e.kind === 'correction') e.settled = true;
       ex.sort((a, b) => (a.kind === 'missing') - (b.kind === 'missing') || Math.abs(b.effect) - Math.abs(a.effect));
 
       const terms = [...new Set(counted.map(r => r.term))].sort();
@@ -316,18 +385,36 @@ const Engine = (() => {
       terms.sort((a, b) => String(termName[a]).localeCompare(String(termName[b]), undefined, { numeric: true }));
       const wrong = [];
       for (const m of matches) { if (m.d.length !== 1 || m.t.length !== 1) continue; const x = m.d[0], y = m.t[0]; const ot = codeType(x.code); if (ot !== y.type) wrong.push({ x, y, from: ot, to: y.type, toCode: codeFor(dept, y.type) }); }
-      const pdfFile = pdfFiles.find(f => f.rows.some(r => r.dept === dept));
+      const pdfFile = pdfFiles.find(f => fdate(f) === mainDate[dept] && f.rows.some(r => r.dept === dept));
       // Matches that balance only on amount: different card numbers, or two items against one.
       // Two separate mistakes can cancel out this way, so they are listed to check, not hidden.
       const checks = matches.filter(m => m.how === 'split' || (m.how === 'amount' && m.d[0].l4 && m.t[0].l4 && m.d[0].l4 !== m.t[0].l4))
         .map(m => ({ ...m, why: m.how === 'split' ? (m.d.length > 1 ? 'Two Opera postings add up to one card charge' : 'Two card charges add up to one Opera posting') : `Same amount, different cards (Opera ••${m.d[0].l4}${m.d[0].by ? ', posted by ' + m.d[0].by : ''}; terminal ••${m.t[0].l4})` }));
       const tbx = basis === 'batch' ? tBatch[dept] : null;
       const batchNote = tbx && batchSet.size && !batchFound(tbx) ? `No row in this export has batch ${tbx}, so sales were counted by transaction date (${bdate[dept]}) instead. Check the batch in Settings if this is wrong.` : '';
+      // An export of exactly 300 (400, 500...) rows has probably hit the portal's download limit.
+      // Only tonight's export counts here, not another night's export loaded alongside it.
+      const mainDay = f => { const c = {}; for (const r of f.rows) c[r.created_at_date] = (c[r.created_at_date] || 0) + 1; return Object.entries(c).sort((a, b) => b[1] - a[1])[0]?.[0]; };
+      const capped = f => f.rows.length >= 100 && f.rows.length % 100 === 0 && mainDay(f) === bdate[dept];
+      const capNote = csvFiles.filter(capped).map(f => {
+        const e = f.rows.map(r => (r.created_at_date || '') + ' ' + (r.created_at_time || '')).sort()[0] || '';
+        return `${f.name} has exactly ${f.rows.length} rows. The portal may have stopped there, so some transactions could be missing (its earliest row is ${fmtD(e.slice(0, 10))} ${e.slice(11, 16)}). Export again and check the file starts just after midnight.`;
+      }).join(' ');
+      const reasons = [];
+      if (pdfFile && !pdfFile.grandOk) reasons.push('The D140 postings do not add up to its Grand Total, so some lines were not read.');
+      const firstOp = d.map(x => x.time).sort()[0] || '99:99';
+      const cut = csvFiles.find(f => { if (!capped(f)) return false; const e = f.rows.map(r => (r.created_at_date || '') + ' ' + (r.created_at_time || '')).sort()[0] || ''; return e.slice(0, 10) > (bdate[dept] || '') || (e.slice(0, 10) === bdate[dept] && e.slice(11, 16) > firstOp); });
+      if (cut) reasons.push(`${cut.name} looks cut off: exactly ${cut.rows.length} rows, starting after the first Opera posting (${firstOp}).`);
+      if (preauthStyle && dept === 'FO') reasons.push('This export type leaves out check-outs whose pre-auth was taken on an earlier day.');
+      const unfound = ex.filter(e => (e.kind === 'opera' || e.kind === 'missing' || e.kind === 'declined') && e.row.amt > 0 && !e.late).length;
+      if (d.length >= 20 && unfound >= 5 && unfound / d.length > 0.2) reasons.push(`${unfound} of ${d.length} Opera postings have no card charge in the export. It is probably incomplete or the wrong export type.`);
       out[dept] = {
-        dept, bd: bdate[dept], tBatch: tbx && !batchNote ? tbx : null, tTot, dTot, variance: tTot - dTot,
+        dept, bd: bdate[dept], trust: { ok: !reasons.length, reasons }, tBatch: tbx && !batchNote ? tbx : null, tTot, dTot, variance: tTot - dTot,
         checkable: preauthStyle && dept === 'FO' && unverifiable ? (tTot - dTot) + unverifiable : null,
-        warn: [preauthStyle && dept === 'FO' ? `This export files check-outs under their pre-auth date and starts ${startTxt}. Check-outs with older pre-auths are missing. Export by settlement batch for a full check.` : '', batchNote].filter(Boolean).join(' '),
-        checks, otherNight, nonCard: nonCard[dept],
+        warn: [preauthStyle && dept === 'FO' ? `This export files check-outs under their pre-auth date and starts ${startTxt}. Check-outs with older pre-auths are missing. Export by settlement batch for a full check.` : '', batchNote, capNote].filter(Boolean).join(' '),
+        checks, otherNight, completedLater, nonCard: nonCard[dept],
+        // Later D140s loaded with this audit (date and postings), and how much of tonight's variance they explain.
+        followUp: [...new Set(fu.map(z => z.bd))].sort(), cleared: ex.filter(e => e.late).reduce((a, e) => a + e.effect, 0),
         grandOk: pdfFile ? pdfFile.grandOk : true,
         tCount: counted.length, dCount: d.length, terms, termTot, termOrg, termName, sheet, wrong, matches, offsets, ex, dupRows, ignored: ignored[dept],
         // Charges taken on the other department's terminals and counted here, with the Opera posting they matched.
