@@ -43,20 +43,20 @@ const Report = (() => {
     doc.setFont('helvetica', 'normal'); doc.setFontSize(10.5); doc.setTextColor(...MUTE);
     doc.text(clean(`${dayTxt}${batch ? '   |   Batch ' + batch : ''}`), M, y + 19);
     y += 42;
-    const cw = (W - 2 * M - 18) / 2, ch = 168;
+    const cw = (W - 2 * M - 18) / 2, ch = depts.some(([, r]) => cents(r.xNet || 0)) ? 182 : 168;
     depts.forEach(([dept, r], i) => {
       const x = M + i * (cw + 18), top = y, nil = cents(r.variance) === 0;
       doc.setFillColor(...SOFT); doc.roundedRect(x, top, cw, ch, 8, 8, 'F');
       doc.setFillColor(...vcol(r.variance)); doc.roundedRect(x, top, 6, ch, 3, 3, 'F'); doc.rect(x + 3, top, 3, ch, 'F');
       doc.setFont('helvetica', 'bold'); doc.setFontSize(14); doc.setTextColor(...INK); doc.text(dept === 'FO' ? 'Front Office' : 'Food & Beverage', x + 22, top + 30);
-      const bad = r.trust && !r.trust.ok, pill = bad ? 'NOT RELIABLE - CHECK FILES' : nil ? 'BALANCED' : 'OUT ' + pm(r.variance); doc.setFontSize(8.5); const pw = doc.getTextWidth(pill) + 20;
+      const bad = r.trust && !r.trust.ok, pill = bad ? 'NOT RELIABLE - CHECK FILES' : nil ? 'BALANCED' + (cents(r.xNet || 0) ? ' WITH VARIANCE ' + pm(r.xNet) : '') : 'OUT ' + pm(r.variance); doc.setFontSize(8.5); const pw = doc.getTextWidth(pill) + 20;
       doc.setFillColor(...(bad ? REDS : vsoft(r.variance))); doc.roundedRect(x + cw - 18 - pw, top + 16, pw, 19, 9.5, 9.5, 'F'); doc.setTextColor(...(bad ? RED : vcol(r.variance))); doc.text(pill, x + cw - 18 - pw / 2, top + 28.5, { align: 'center' });
       const fw = (cw - 40) / 3;
       const fig = (k, v, cx, col) => { doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(...MUTE); doc.text(k, cx, top + 60); doc.setFont('helvetica', 'bold'); doc.setFontSize(15); doc.setTextColor(...(col || INK)); doc.text(v, cx, top + 80); };
-      fig('Terminals', pm(r.tTot), x + 22); fig('Opera D140', pm(r.dTot), x + 22 + fw); fig('Variance', nil ? '0.00' : pm(r.variance), x + 22 + 2 * fw, vcol(r.variance));
+      const xv = r.variance + (r.xNet || 0); fig('Terminals', pm(r.tTot + (r.xNet || 0)), x + 22); fig('Opera D140', pm(r.dTot), x + 22 + fw); fig('Variance', cents(xv) ? pm(xv) : '0.00', x + 22 + 2 * fw, vcol(xv));
       doc.setDrawColor(...LINE); doc.setLineWidth(0.8); doc.line(x + 22, top + 96, x + cw - 18, top + 96);
       const fix = r.ex.filter(e => e.kind !== 'dup' && e.kind !== 'missing' && !e.settled).length;
-      const nck = (r.checks || []).length; const pts = [`${fix} item${fix === 1 ? '' : 's'} to fix${nck ? `, ${nck} to check (balance on amount only)` : ''}`, `${r.wrong.length} posting${r.wrong.length === 1 ? '' : 's'} on the wrong card code`, `${r.matches.length} matched transactions${(r.crossIn || []).length + (r.crossOut || []).length ? `, ${(r.crossIn || []).length + (r.crossOut || []).length} on the other department's terminal` : ''}`];
+      const nck = (r.checks || []).length; const pts = [...(cents(r.xNet || 0) ? [`${pm(r.xNet)} is the other department's charges on these terminals; still open ${pm(r.variance)}`] : []), `${fix} item${fix === 1 ? '' : 's'} to fix${nck ? `, ${nck} to check (balance on amount only)` : ''}`, `${r.wrong.length} posting${r.wrong.length === 1 ? '' : 's'} on the wrong card code`, `${r.matches.length} matched transactions${(r.crossIn || []).length + (r.crossOut || []).length ? `, ${(r.crossIn || []).length + (r.crossOut || []).length} on the other department's terminal` : ''}`];
       if ((r.followUp || []).length && cents(r.cleared)) pts.push(`${pm(r.cleared)} posted or reversed later; still open ${pm(r.variance - r.cleared)}`);
       if ((r.completedLater || []).length) pts.push(`${r.completedLater.length} pre-auths completed after this date, not counted`);
       if (r.checkable !== null) pts.push(`Checkable variance ${pm(r.checkable)} (export incomplete)`);
@@ -75,17 +75,17 @@ const Report = (() => {
       doc.addPage(); let y = 98;
       doc.setFont('helvetica', 'bold'); doc.setFontSize(17); doc.setTextColor(...INK); doc.text(dept === 'FO' ? 'Front Office' : 'Food & Beverage', M, y);
       doc.setFont('helvetica', 'normal'); doc.setFontSize(9.5); doc.setTextColor(...MUTE);
-      doc.text(clean(`Terminals ${pm(r.tTot)}    Opera D140 ${pm(r.dTot)}    Variance ${cents(r.variance) === 0 ? 'NIL' : pm(r.variance)}`), M, y + 16);
+      doc.text(clean(`Terminals ${pm(r.tTot + (r.xNet || 0))}    Opera D140 ${pm(r.dTot)}    Variance ${cents(r.variance + (r.xNet || 0)) === 0 ? 'NIL' : pm(r.variance + (r.xNet || 0))}${cents(r.xNet || 0) ? `    Other department ${pm(r.xNet)}    Still open ${cents(r.variance) === 0 ? 'NIL' : pm(r.variance)}` : ''}`), M, y + 16);
       y += 38;
       if (r.trust && !r.trust.ok) { doc.setFontSize(8.5); const ls = doc.splitTextToSize(clean("This result can't be trusted yet. " + r.trust.reasons.join(' ')), W - 2 * M - 24); const bh = ls.length * 11 + 14; doc.setFillColor(...REDS); doc.roundedRect(M, y - 10, W - 2 * M, bh, 4, 4, 'F'); doc.setTextColor(...RED); doc.text(ls, M + 12, y + 2); y += bh + 14; }
       if (r.warn) { doc.setFontSize(8.5); const ls = doc.splitTextToSize(clean(r.warn), W - 2 * M - 24); const bh = ls.length * 11 + 14; doc.setFillColor(255, 236, 224); doc.roundedRect(M, y - 10, W - 2 * M, bh, 4, 4, 'F'); doc.setTextColor(...ORG); doc.text(ls, M + 12, y + 2); y += bh + 14; }
       y = h2('Recon sheet', y) + 4;
       const types = Object.keys(r.sheet).filter(ty => ['EFTPOS', 'MC', 'VISA', 'Union Pay', 'Amex', 'AliPay & WeChat', 'JCB'].includes(ty) || r.sheet[ty].tt || r.sheet[ty].op);
       const body = types.map(ty => { const o = r.sheet[ty]; return [ty, Engine.codeFor(dept, ty), ...r.terms.map(t => pn(o.t[t] || 0)), pn0(o.tt), pn0(o.op), pn0(o.tt - o.op)]; });
-      body.push(['TOTAL', '', ...r.terms.map(t => pn0(r.termTot[t] || 0)), pn0(r.tTot), pn0(r.dTot), pn0(r.variance)]);
+      body.push(['TOTAL', '', ...r.terms.map(t => pn0(r.termTot[t] || 0)), pn0(r.tTot + (r.xNet || 0)), pn0(r.dTot), pn0(r.variance + (r.xNet || 0))]);
       const nc = 2 + r.terms.length + 3; const cs = { 0: { fontStyle: 'bold', cellWidth: 96 }, 1: { cellWidth: 52 } }; for (let i = 2; i < nc; i++) cs[i] = { halign: 'right' };
       y = table({ startY: y, head: [['Card type', 'Code', ...r.terms.map(t => clean((r.termName && r.termName[t]) || "Terminal " + t)), "Terminals", "Opera D140", "Variance"]], body, columnStyles: cs,
-        didParseCell: d => { if (d.section !== 'body') return; if (d.row.index === body.length - 1) { d.cell.styles.fontStyle = 'bold'; d.cell.styles.fillColor = SOFT; } if (d.column.index === nc - 1 && d.cell.raw !== "0.00") { const rv = d.row.index === body.length - 1 ? r.variance : r.sheet[types[d.row.index]].tt - r.sheet[types[d.row.index]].op; d.cell.styles.textColor = vcol(rv); d.cell.styles.fontStyle = 'bold'; } } });
+        didParseCell: d => { if (d.section !== 'body') return; if (d.row.index === body.length - 1) { d.cell.styles.fontStyle = 'bold'; d.cell.styles.fillColor = SOFT; } if (d.column.index === nc - 1 && d.cell.raw !== "0.00") { const rv = d.row.index === body.length - 1 ? r.variance + (r.xNet || 0) : r.sheet[types[d.row.index]].tt - r.sheet[types[d.row.index]].op; d.cell.styles.textColor = vcol(rv); d.cell.styles.fontStyle = 'bold'; } } });
       if (r.wrong.length) y = note('Card-type differences come from postings on the wrong card code. They cancel out in the total.', y + 14);
       y = need(y + 20, 80);
       const fixes = r.ex.filter(e => e.kind !== 'dup' && e.kind !== 'missing' && !e.settled), rest = r.ex.filter(e => (e.kind === 'dup' || e.kind === 'missing') && !e.settled), late = r.ex.filter(e => e.settled);

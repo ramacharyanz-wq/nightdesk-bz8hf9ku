@@ -155,17 +155,25 @@
   const vc = v => cents(v) === 0 ? "ok" : v > 0 ? "over" : "under";
   const deptName = d => d === 'FO' ? 'Front Office' : 'F&B';
   const fmtDate = (bd, o) => bd ? new Date(bd + 'T12:00:00').toLocaleDateString('en-NZ', o || { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }) : '';
+  // Where an Opera posting is, for notes: "FO D140 (26 Nov), page 3, Rm 0812".
+  const d140Ref = x => [`${x.dept === 'FO' ? 'FO' : 'F&B'} D140 (${x.range ? `From Date ${x.range.from} To Date ${x.range.to}` : fmtDate(x.bd || S.res?.[x.dept]?.bd, { day: 'numeric', month: 'short' })})`, x.page ? 'page ' + x.page : '', x.room ? 'Rm ' + x.room : ''].filter(Boolean).join(', ');
+  const d140Refs = l => [...new Set(l.filter(c => c.d).map(c => d140Ref(c.d)))].join('; ');
   function receipt(dept, r, print) {
     if (!r || r.skip) return `<div class="printer ghost"><div class="mouth"></div><div class="feed"><div class="receipt"><div class="c h1">${esc(deptName(dept).toUpperCase())}</div><div class="c h2">${r?.skip ? 'NO D140 LOADED' : 'WAITING'}</div><div class="rule"></div><div class="ln"><span>TERMINALS</span><span>—</span></div><div class="ln"><span>OPERA D140</span><span>—</span></div><div class="rule"></div><div class="ln big"><span>VARIANCE</span><span>—</span></div><div class="stampwrap"></div><div class="bar"></div></div></div></div>`;
+    // Show terminals the way the real terminal report does: charges taken on this department's terminals for the
+    // other department stay on this side (xo), and charges taken on the other side's terminals come off (xi).
+    // The receipt variance then follows the terminal report, and "OTHER DEPT" explains the part that is not a difference.
+    const xNet = r.xNet || 0, shownV = r.variance + xNet;
     const nil = cents(r.variance) === 0, fix = r.ex.filter(e => e.kind !== 'dup' && e.kind !== 'missing' && !e.settled).length, late = (r.followUp || []).length, cl = r.completedLater || [];
     return `<div class="printer ${S.sel === dept ? 'sel' : ''}" data-dept="${esc(dept)}"><div class="mouth"></div><div class="feed"><div class="receipt ${print ? 'print' : ''}" role="button" tabindex="0" aria-label="${esc(deptName(dept))} details">
       <div class="c h1">${esc(deptName(dept).toUpperCase())}</div>
       <div class="c h2">${esc(fmtDate(r.bd).toUpperCase())}${r.tBatch ? '<br>BATCH ' + esc(r.tBatch) : ''}</div>
       <div class="rule"></div>
-      <div class="ln"><span>TERMINALS</span><span>${plain(r.tTot)}</span></div>
+      <div class="ln"><span>TERMINALS</span><span>${plain(r.tTot + xNet)}</span></div>
       <div class="ln"><span>OPERA D140</span><span>${plain(r.dTot)}</span></div>
       <div class="rule"></div>
-      <div class="ln big"><span>VARIANCE</span><span class="v-${vc(r.variance)}">${plain(r.variance)}</span></div>
+      <div class="ln big"><span>VARIANCE</span><span class="v-${vc(shownV)}">${plain(shownV)}</span></div>
+      ${cents(xNet) ? `<div class="ln"><span>OTHER DEPT</span><span>${plain(xNet)}</span></div>${late && cents(r.cleared) ? '' : `<div class="ln"><span>STILL OPEN</span><span class="v-${vc(r.variance)}">${plain(r.variance)}</span></div>`}` : ''}
       ${late && cents(r.cleared) ? `<div class="ln"><span>POSTED LATER</span><span>${plain(r.cleared)}</span></div><div class="ln"><span>STILL OPEN</span><span class="v-${vc(r.variance - r.cleared)}">${plain(r.variance - r.cleared)}</span></div>` : ''}
       ${cl.length ? `<div class="ln"><span>DONE AFTER DATE</span><span>${late ? cl.filter(y => y.confirm).length + '/' : ''}${cl.length}</span></div>` : ''}
       ${r.checkable !== null ? `<div class="ln"><span>CHECKABLE</span><span>${plain(r.checkable)}</span></div>` : ''}
@@ -176,7 +184,7 @@
       ${(r.checks || []).length ? `<div class="ln"><span>CHECK THESE</span><span>${r.checks.length}</span></div>` : ''}
       <div class="ln"><span>MATCHED</span><span>${r.matches.length}</span></div>
       ${r.trust && !r.trust.ok ? `<div class="ln"><span>FILES CHECK</span><span class="v-under">FAILED</span></div>` : ''}
-      <div class="stampwrap"><div class="stamp ${r.trust && !r.trust.ok ? 'under' : vc(r.variance)}">${r.trust && !r.trust.ok ? 'CHECK FILES<small>NOT RELIABLE</small>' : nil ? 'BALANCED' + ((r.checks || []).length ? `<small>${r.checks.length} TO CHECK</small>` : '') : 'OUT<small>' + esc(money(r.variance, true)) + '</small>'}</div></div>
+      <div class="stampwrap"><div class="stamp ${r.trust && !r.trust.ok ? 'under' : vc(r.variance)}">${r.trust && !r.trust.ok ? 'CHECK FILES<small>NOT RELIABLE</small>' : nil ? 'BALANCED' + (cents(xNet) ? `<small>WITH VARIANCE ${esc(money(xNet, true))}</small>` : '') + ((r.checks || []).length ? `<small>${r.checks.length} TO CHECK</small>` : '') : 'OUT<small>' + esc(money(r.variance, true)) + '</small>'}</div></div>
       <div class="bar"></div>
     </div></div></div>`;
   }
@@ -190,7 +198,7 @@
     }
     box.innerHTML = ['FO', 'F&B'].map(d => receipt(d, S.res[d], print)).join('');
     box.querySelectorAll('.printer[data-dept]').forEach(p => {
-      const go = () => { S.sel = p.dataset.dept; S.tab = null; renderReceipts(false); renderDetail(); $('#detail').scrollIntoView({ behavior: 'smooth', block: 'start' }); };
+      const go = () => { S.sel = p.dataset.dept; S.tab = null; renderReceipts(false); renderBanners(); renderDetail(); $('#detail').scrollIntoView({ behavior: 'smooth', block: 'start' }); };
       p.querySelector('.receipt').addEventListener('click', go);
       p.querySelector('.receipt').addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } });
     });
@@ -342,17 +350,21 @@
     for (const m of r.matches) for (const y of m.t) st.set(y, { m });
     for (const m of r.checks || []) for (const y of m.t) st.set(y, { c: m });
     for (const e of r.ex) if (e.row.side === 'T' && e.kind !== 'missing') st.set(e.row, { e });
+    // Taken on this terminal but posted (and matched) in the other department's Opera.
+    for (const c of r.crossOut || []) if (!st.has(c.t)) st.set(c.t, { x: c });
     // Items the tile counts but tonight's total leaves out (a row shown twice in the export) still go in the flagged part.
     const extra = r.ex.filter(e => e.row.side === 'T' && e.kind !== 'missing' && e.row.term === t && !rows.includes(e.row)).map(e => e.row);
-    const flagged = [...rows.filter(y => st.get(y)?.e || st.get(y)?.c), ...extra], rest = rows.filter(y => !flagged.includes(y));
-    const where = x => `${x.name}, Room ${x.room}, D140 page ${x.page}${x.receipt ? ', #' + x.receipt : ''}${x.by ? ', posted by ' + x.by : ''}`;
+    const flagged = [...rows.filter(y => st.get(y)?.e || st.get(y)?.c || st.get(y)?.x), ...extra], rest = rows.filter(y => !flagged.includes(y));
+    const xHint = c => c.d ? `On this terminal's report, but posted and counted in ${deptName(c.d.dept)}: ${d140Ref(c.d)}${c.d.name ? ' (' + c.d.name + ')' : ''}. Not a difference.` : 'On this terminal\'s report, but counted in the other department. Not a difference.';
+    const where = x => `${x.name}, Rm ${x.room}, D140 page ${x.page}${x.receipt ? ', #' + x.receipt : ''}${x.by ? ', posted by ' + x.by : ''}`;
     const item = y => { const s = st.get(y) || {};
       if (s.e) return exItem(s.e);
       if (s.c) return checkItem(s.c);
+      if (s.x) return { label: 'Other department', tone: 'ok', amt: y.amt, sub: 'posted in ' + deptName(s.x.d ? s.x.d.dept : (r.dept === 'FO' ? 'F&B' : 'FO')) + ' Opera', hint: xHint(s.x), T: [y], D: s.x.d ? [s.x.d] : [], hl: 'total', tag: 'Other dept' };
       if (s.m) return { label: 'Matched', tone: 'ok', amt: y.amt, sub: s.m.how === 'tip' ? 'matched, tip included' : 'matches Opera', hint: `Matched to ${s.m.d.map(where).join(' and ')}.`, T: s.m.t, D: s.m.d, hl: 'total', tag: 'Matched' };
       return { label: 'Counted', tone: 'ok', amt: y.amt, sub: 'in tonight\'s total', hint: 'Counted in tonight\'s terminal total.', T: [y], D: [], hl: 'total', tag: '' };
     };
-    const flag = y => { const s = st.get(y) || {}; return s.e ? { tag: kindOf(s.e), tone: s.e.settled ? 'check' : exTone(s.e), hint: s.e.hint } : s.c ? { tag: 'Check', tone: 'check', hint: s.c.why + '. Confirm it is the same guest and payment.' } : null; };
+    const flag = y => { const s = st.get(y) || {}; return s.e ? { tag: kindOf(s.e), tone: s.e.settled ? 'check' : exTone(s.e), hint: s.e.hint } : s.c ? { tag: 'Check', tone: 'check', hint: s.c.why + '. Confirm it is the same guest and payment.' } : s.x ? { tag: 'Posted in ' + deptName(s.x.d ? s.x.d.dept : (r.dept === 'FO' ? 'F&B' : 'FO')), tone: vc(y.amt), hint: xHint(s.x) } : null; };
     return { rows, flagged, rest, flag, items: [...flagged, ...rest].map(item) };
   }
   // Settlement enquiry, laid out like the terminal's own slip. Worked out from tonight's counted rows.
@@ -423,7 +435,8 @@
     const types = sheetTypes(r);
     const head = ['Card type', 'Code', ...r.terms.map(t => tname(r, t)), "Terminals", "Opera", "Variance"];
     const rows = types.map(ty => { const o = r.sheet[ty]; return [ty, Engine.codeFor(r.dept, ty), ...r.terms.map(t => (o.t[t] || 0).toFixed(2)), o.tt.toFixed(2), o.op.toFixed(2), (o.tt - o.op).toFixed(2)]; });
-    rows.push(['Total', '', ...r.terms.map(t => (r.termTot[t] || 0).toFixed(2)), r.tTot.toFixed(2), r.dTot.toFixed(2), r.variance.toFixed(2)]);
+    rows.push(['Total', '', ...r.terms.map(t => (r.termTot[t] || 0).toFixed(2)), (r.tTot + (r.xNet || 0)).toFixed(2), r.dTot.toFixed(2), (r.variance + (r.xNet || 0)).toFixed(2)]);
+    if (cents(r.xNet || 0)) { const pad = ['', ...r.terms.map(() => ''), '', '']; rows.push(['Other department', ...pad, r.xNet.toFixed(2)]); rows.push(['Still open', ...pad, r.variance.toFixed(2)]); }
     return [head, ...rows].map(a => a.join('\t')).join('\n');
   }
   const sheetTypes = r => Object.keys(r.sheet).filter(ty => Engine.TYPES.includes(ty) || r.sheet[ty].tt || r.sheet[ty].op);
@@ -443,9 +456,12 @@
       <div class="vals num"><b>${plain(o.tt)}</b><br>${plain(o.op)}${cents(v) ? `<br><span class="pill ${vc(v)}">${money(v, true)}</span>` : ''}</div></div>`; }).join('');
     // Variance that sits on a terminal (charges there with no Opera posting, double charges, tips not posted).
     const tVar = {}; let anyVar = false; for (const e of r.ex) if (e.row.side === 'T' && e.kind !== 'missing') tVar[e.row.term] = (tVar[e.row.term] || 0) + e.effect;
-    anyVar = Object.values(tVar).some(x => cents(x));
-    const terms = r.terms.map(t => { const v = tVar[t] || 0, n = r.ex.filter(e => e.row.side === 'T' && e.kind !== 'missing' && e.row.term === t).length;
-      return `<div class="term tap${cents(v) ? ' has-var' : ''}" data-t="${esc(t)}" role="button" tabindex="0" aria-label="${esc(tname(r, t))}, ${money(r.termTot[t] || 0)}, open transactions"><div class="id">${ic.pos(16)}${esc(tname(r, t))}</div><div class="org">${esc(r.termOrg[t])} · ${esc(t)}</div><div class="amt num">${money(r.termTot[t] || 0)}</div>${cents(v) ? `<span class="tflag ${vc(v)}" title="Variance on this terminal" aria-label="Variance on this terminal">${ic.alert(14)}</span><div class="tvar ${vc(v)}">${money(v, true)} <small>· ${n} to fix</small></div>` : anyVar ? '<div class="tvar" aria-hidden="true">&nbsp;</div>' : ''}</div>`; }).join('');
+    // Charges on this terminal that were posted in the other department's Opera (on the real terminal report, not a difference).
+    const xVar = {}; for (const c of r.crossOut || []) xVar[c.t.term] = (xVar[c.t.term] || 0) + c.t.amt;
+    anyVar = Object.values(tVar).some(x => cents(x)) || Object.values(xVar).some(x => cents(x));
+    const oth = r.dept === 'FO' ? 'F&B' : 'FO';
+    const terms = r.terms.map(t => { const v = tVar[t] || 0, xv = xVar[t] || 0, fl = cents(v) ? vc(v) : cents(xv) ? vc(xv) : '', n = r.ex.filter(e => e.row.side === 'T' && e.kind !== 'missing' && e.row.term === t).length;
+      return `<div class="term tap${cents(v) ? ' has-var' : ''}" data-t="${esc(t)}" role="button" tabindex="0" aria-label="${esc(tname(r, t))}, ${money(r.termTot[t] || 0)}, open transactions"><div class="id">${ic.pos(16)}${esc(tname(r, t))}</div><div class="org">${esc(r.termOrg[t])} · ${esc(t)}</div><div class="amt num">${money(r.termTot[t] || 0)}</div>${fl ? `<span class="tflag ${fl}" title="${cents(v) ? 'Variance on this terminal' : 'Has charges posted in ' + esc(deptName(oth))}" aria-label="${cents(v) ? 'Variance on this terminal' : 'Has charges posted in ' + esc(deptName(oth))}">${ic.alert(14)}</span>` : ''}${cents(v) ? `<div class="tvar ${vc(v)}">${money(v, true)} <small>· ${n} to fix</small></div>` : ''}${cents(xv) ? `<div class="tvar ${vc(xv)}">${money(xv, true)} <small>· posted in ${esc(deptName(oth))}</small></div>` : ''}${fl ? '' : anyVar ? '<div class="tvar" aria-hidden="true">&nbsp;</div>' : ''}</div>`; }).join('');
 
     let body = '';
     // Sections under To fix fold away: a "View all <word>" button opens each one. Open ones stay open while you work.
@@ -471,7 +487,7 @@
       const st = sheetTypes(r);
       body = `<div class="tablewrap"><table class="sheet"><thead><tr><th>Card type</th><th>Code</th>${r.terms.map(t => `<th class="r">${esc(tname(r, t))}</th>`).join('')}<th class="r">Terminals</th><th class="r">Opera</th><th class="r">Variance</th></tr></thead><tbody>
         ${st.map(ty => { const o = r.sheet[ty], v = o.tt - o.op; return `<tr><td><b>${esc(ty)}</b></td><td>${esc(Engine.codeFor(r.dept, ty))}</td>${r.terms.map(t => `<td class="r">${o.t[t] ? plain(o.t[t]) : ''}</td>`).join('')}<td class="r"><b>${plain(o.tt)}</b></td><td class="r">${plain(o.op)}</td><td class="r ${cents(v) ? "v-" + vc(v) : ""}">${plain(v)}</td></tr>`; }).join('')}
-        <tr class="tot"><td>Total</td><td></td>${r.terms.map(t => `<td class="r">${plain(r.termTot[t] || 0)}</td>`).join('')}<td class="r">${plain(r.tTot)}</td><td class="r">${plain(r.dTot)}</td><td class="r ${cents(r.variance) ? "v-" + vc(r.variance) : "pos"}">${plain(r.variance)}</td></tr></tbody></table></div>`;
+        <tr class="tot"><td>Total</td><td></td>${r.terms.map(t => `<td class="r">${plain(r.termTot[t] || 0)}</td>`).join('')}<td class="r">${plain(r.tTot + (r.xNet || 0))}</td><td class="r">${plain(r.dTot)}</td><td class="r ${cents(r.variance + (r.xNet || 0)) ? "v-" + vc(r.variance + (r.xNet || 0)) : "pos"}">${plain(r.variance + (r.xNet || 0))}</td></tr>${cents(r.xNet || 0) ? `<tr><td>Other department</td><td colspan="${r.terms.length + 3}"></td><td class="r">${plain(r.xNet)}</td></tr><tr class="tot"><td>Still open</td><td colspan="${r.terms.length + 3}"></td><td class="r ${cents(r.variance) ? "v-" + vc(r.variance) : "pos"}">${plain(r.variance)}</td></tr>` : ''}</tbody></table></div>`;
     } else {
       body = `<div class="tablewrap"><table><thead><tr><th>Opera posting</th><th>Page</th><th class="r">Opera</th><th>Terminal</th><th class="r">Terminal</th></tr></thead><tbody>${r.matches.map(m => `<tr><td>${m.d.map(x => `${esc(x.time)} · ${esc(x.name)} · Rm ${esc(x.room)}${x.by ? ' · by ' + esc(x.by) : ''}`).join('<br>')}</td><td>${m.d.map(x => esc(x.page)).join('<br>')}</td><td class="r">${m.d.map(x => plain(x.amt)).join('<br>')}</td><td>${m.t.map(y => `${esc(y.tn)} · ${esc(y.time)} · ${esc(y.type)} ••${esc(y.l4)}`).join('<br>')}</td><td class="r">${m.t.map(y => plain(y.amt)).join('<br>')}</td></tr>`).join('')}</tbody></table></div>`;
     }
@@ -488,7 +504,7 @@
     });
     el.querySelectorAll('details.sec').forEach(d => d.addEventListener('toggle', () => { if (d.open) S.open.add(d.dataset.k); else S.open.delete(d.dataset.k); }));
     el.querySelectorAll('.term[data-t]').forEach(c => { c.addEventListener('click', () => openTV(c.dataset.t)); c.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openTV(c.dataset.t); } }); });
-    el.querySelectorAll('.seg button').forEach(b => b.addEventListener('click', () => { S.sel = b.dataset.d; S.tab = null; renderReceipts(false); renderDetail(); }));
+    el.querySelectorAll('.seg button').forEach(b => b.addEventListener('click', () => { S.sel = b.dataset.d; S.tab = null; renderReceipts(false); renderBanners(); renderDetail(); }));
     el.querySelectorAll('.tabs button').forEach(b => b.addEventListener('click', () => { S.tab = b.dataset.t; const x = el.querySelector('.tabs').scrollLeft; renderDetail(); const t = $('#detail .tabs'); if (t) t.scrollLeft = x; }));
     { const t = el.querySelector('.tabs'), on = t && t.querySelector('.on'); if (t && on && t.scrollWidth > t.clientWidth) { const l = on.offsetLeft - 18, r = on.offsetLeft + on.offsetWidth - t.clientWidth + 18; if (t.scrollLeft > l) t.scrollLeft = l; else if (t.scrollLeft < r) t.scrollLeft = r; } }
     $('#b-copy').addEventListener('click', () => copy(sheetTSV(r)));
@@ -512,8 +528,8 @@
     if (r && r.trust && !r.trust.ok) b.push(`<div class="banner bad">${ic.alert(18)}<span><b>This result can't be trusted yet.</b> ${r.trust.reasons.map(esc).join(' ')} Fix the files and load them again before signing off.</span></div>`);
     if (r && r.warn) b.push(`<div class="banner">${ic.alert(18)}<span>${esc(r.warn)}</span></div>`);
     if (r && !r.skip) { const oth = deptName(S.sel === 'FO' ? 'F&B' : 'FO'), me = deptName(S.sel), sum = l => l.reduce((a, c) => a + c.t.amt, 0);
-      if (r.crossIn.length) b.push(`<div class="banner info">${ic.pos(18)}<span>${me} includes ${money(sum(r.crossIn))} (${r.crossIn.length}) charged on ${oth} terminals and posted in ${me} Opera. It is counted here, so it is not a difference. See the To fix tab.</span></div>`);
-      if (r.crossOut.length) b.push(`<div class="banner info">${ic.pos(18)}<span>${money(sum(r.crossOut))} (${r.crossOut.length}) charged on ${me} terminals belongs to ${oth} and is counted there. ${me} terminal totals here are lower than the terminal report by this amount.</span></div>`);
+      if (r.crossIn.length) b.push(`<div class="banner info">${ic.pos(18)}<span>${me} includes ${money(sum(r.crossIn))} (${r.crossIn.length}) charged on ${oth} terminals and posted in ${me} Opera${d140Refs(r.crossIn) ? ', see ' + esc(d140Refs(r.crossIn)) : ''}. The ${me} terminal report is lower by this amount, and so is the receipt. It is not a difference. See the To fix tab.</span></div>`);
+      if (r.crossOut.length) b.push(`<div class="banner info">${ic.pos(18)}<span>${money(sum(r.crossOut))} (${r.crossOut.length}) charged on ${me} terminals belongs to ${oth} and is counted there${d140Refs(r.crossOut) ? ', see ' + esc(d140Refs(r.crossOut)) : ''}. The ${me} terminal report is higher by this amount, and so is the receipt. It is not a difference.</span></div>`);
       const ck = r.checks || [], on = r.otherNight || [], nc = r.nonCard || [];
       if (ck.length) b.push(`<div class="banner">${ic.alert(18)}<span>${ck.length} ${ck.length === 1 ? 'match balances' : 'matches balance'} only on amount (different cards, or two items against one). Two mistakes can cancel out and look balanced. Check ${ck.length === 1 ? 'it' : 'them'} on the To fix tab.</span></div>`);
       const dl = r.completedLater || [];
@@ -533,7 +549,7 @@
   function saveHistory() {
     if (!S.res) return; const any = Object.values(S.res).find(r => !r.skip); if (!any) return;
     const h = store.get('cr-history', []).filter(x => x.bd !== any.bd);
-    const sum = r => r && !r.skip ? { v: r.variance, open: r.variance - (r.cleared || 0), trusted: !r.trust || r.trust.ok, fix: r.ex.filter(e => e.kind !== 'dup' && e.kind !== 'missing' && !e.settled).length, codes: r.wrong.length, t: r.tTot, o: r.dTot } : null;
+    const sum = r => r && !r.skip ? { v: r.variance, open: r.variance - (r.cleared || 0), trusted: !r.trust || r.trust.ok, fix: r.ex.filter(e => e.kind !== 'dup' && e.kind !== 'missing' && !e.settled).length, codes: r.wrong.length, t: r.tTot + (r.xNet || 0), o: r.dTot, x: r.xNet || 0 } : null;
     h.unshift({ bd: any.bd, at: Date.now(), fo: sum(S.res.FO), fb: sum(S.res['F&B']) });
     store.set('cr-history', h.sort((a, b) => b.bd.localeCompare(a.bd)).slice(0, 120));
   }

@@ -46,8 +46,10 @@ const Engine = (() => {
   }
   const POST = /^\s*(\d\d-\d\d-\d\d)\s+(\d\d:\d\d)\s+(\S+)\s+(.*?)\s+(9\d{4})\s+(.*?)\s*NZD\s+(-?\s*[\d,]+\.\d\d)\s+(-?\s*[\d,]+\.\d\d)/;
   function parseD140(lines, pages, file, geo = [], sizes = []) {
-    const rows = []; let grand = null;
+    const rows = []; let grand = null, range = null;
     lines.forEach((l, i) => {
+      // Report filter dates as printed on the D140 ("From Date 26-11-26 To Date 26-11-26"), quoted in notes.
+      const fr = !range && l.match(/From Date\s+(\d\d-\d\d-\d\d)\s+To Date\s+(\d\d-\d\d-\d\d)/); if (fr) range = { from: fr[1], to: fr[2] };
       const gm = l.match(/Grand Total\s+(-?\s*[\d,]+\.\d\d)\s+(-?\s*[\d,]+\.\d\d)/); if (gm) grand = num(gm[2]) - num(gm[1]);
       const m = l.match(POST); if (!m) return;
       const name = m[4].split(/\s{2,}/)[0].trim();
@@ -68,6 +70,7 @@ const Engine = (() => {
       rows.push({ side: 'D', date: m[1], time: m[2], room: m[3], name, code: m[5], ref, l4, receipt, page: pages[i], amt, dept: m[5].startsWith('917') ? 'F&B' : 'FO', file, cashier, user, box, line: l.replace(/\s{2,}/g, '  ').trim(), line2: (geo[i + 1] && pages[i + 1] === pages[i]) ? nxt.trim() : '' });
     });
     if (!rows.length) throw new Error('No D140 postings found');
+    if (range) for (const r of rows) r.range = range;
     const total = rows.reduce((a, r) => a + r.amt, 0);
     const dates = {}; rows.forEach(r => dates[r.date] = (dates[r.date] || 0) + 1);
     const top = Object.entries(dates).sort((a, b) => b[1] - a[1])[0][0].match(/(\d\d)-(\d\d)-(\d\d)/);
@@ -324,9 +327,11 @@ const Engine = (() => {
         else { const tw = counted.find(z => z !== y && z.l4 === y.l4 && cents(z.amt) === cents(y.amt)); if (tw) { kind = 'double'; hint = `Same card charged twice (also ${tw.time}, ${tw.tn}). Opera has it once.` + (y.auth && y.auth === tw.auth ? ` Both have the same authorisation code ${y.auth}, so one payment was probably sent twice. Check in the portal whether both settled, and refund one if they did.` : ' Check with the guest\'s folio; refund one if it was not meant.'); } }
         ex.push({ kind, effect: y.amt, row: y, hint });
       }
+      // Where an Opera posting is: room and D140 page, for the notes.
+      const loc = x => [x.room ? 'Rm ' + x.room : '', x.page ? 'D140 page ' + x.page : ''].filter(Boolean).join(', ');
       let unverifiable = 0; const priorUsed = new Set();
       for (const x of du) {
-        const pb = x.by ? ` by ${x.by}` : '';
+        const pb = (x.by ? ` by ${x.by}` : '') + (loc(x) ? ` (${loc(x)})` : '');
         let kind = 'opera', hint = x.amt < 0 ? `Refund posted in Opera${pb}, no refund on any terminal.` : `Posted in Opera${pb}, no card transaction found.`;
         // Charged on an earlier night (that night's export is loaded too) and posted in Opera late, tonight.
         const pc = prior[dept].filter(z => !priorUsed.has(z) && cents(z.amt) === cents(x.amt));
@@ -334,13 +339,13 @@ const Engine = (() => {
         const dec = pr ? null : declined[dept].find(z => Math.abs(cents(z.amt)) === Math.abs(cents(x.amt)) && (!x.l4 || !z.l4 || z.l4 === x.l4));
         if (pr) { priorUsed.add(pr); kind = 'prior'; hint = `Charged on ${fmtD(pr.date)} (${pr.tn}, ${pr.time}, ${pr.type} ••${pr.l4}), posted in Opera only tonight${pb}. Nothing to post; it is a late posting. It shows as a variance on both nights' D140s.`; x.prior = pr; }
         else if (dec) { kind = 'declined'; hint = `${x.amt < 0 ? 'Refund' : 'Sale'} declined on ${dec.tn} at ${dec.time}, never approved, but posted in Opera${pb}.`; }
-        else if (preauthStyle && dept === 'FO' && x.amt > 0) { kind = "missing"; hint = `Not in this export. Likely a check-out with a pre-auth before ${startTxt}.${x.by ? " Posted by " + x.by + "." : ""}`; unverifiable += x.amt; }
+        else if (preauthStyle && dept === 'FO' && x.amt > 0) { kind = "missing"; hint = `Not in this export. Likely a check-out with a pre-auth before ${startTxt}.${x.by ? " Posted by " + x.by + "." : ""}${loc(x) ? " " + loc(x) + "." : ""}`; unverifiable += x.amt; }
         if (kind === 'opera' && x.amt > 0 && mins(x.time) < 360) hint += ` Posted at ${x.time}, after midnight: often the previous night's charge posted late.${prior[dept].length ? ' No matching charge in the previous night\'s export either, so check it.' : ' Load the previous night\'s export too to confirm.'}`;
         ex.push({ kind, effect: -x.amt, row: x, hint });
       }
-      for (const { x, y } of tips) ex.push({ kind: 'tip', effect: y.amt - x.amt, row: y, pair: x, hint: `Tip of ${$(y.grat)} charged on the terminal. Opera has the bill without it (${$(x.amt)}${x.by ? ', posted by ' + x.by : ''}). Post the tip in Opera.` });
+      for (const { x, y } of tips) ex.push({ kind: 'tip', effect: y.amt - x.amt, row: y, pair: x, hint: `Tip of ${$(y.grat)} charged on the terminal. Opera has the bill without it (${[$(x.amt), x.by ? 'posted by ' + x.by : '', loc(x)].filter(Boolean).join(', ')}). Post the tip in Opera.` });
       for (const { x, y } of amountPairs) {
-        const d = y.amt - x.amt, who = x.by ? ` (posted by ${x.by})` : '';
+        const d = y.amt - x.amt, wl = [x.by ? 'posted by ' + x.by : '', loc(x)].filter(Boolean).join(', '), who = wl ? ` (${wl})` : '';
         ex.push({ kind: 'amount', effect: d, row: y, pair: x, hint: d > 0
           ? `Same card ••${y.l4}, same time: charged ${$(y.amt)} on ${y.tn} at ${y.time}, Opera has ${$(x.amt)}${who}. Opera is ${$(d)} short: post the ${$(d)} difference in Opera.`
           : `Same card ••${y.l4}, same time: charged ${$(y.amt)} on ${y.tn} at ${y.time}, Opera has ${$(x.amt)}${who}. Opera is ${$(-d)} more than the charge: correct the Opera payment to ${$(y.amt)}, or charge the guest the ${$(-d)} still owed.` });
@@ -353,12 +358,12 @@ const Engine = (() => {
       for (const e of ex) {
         const x = e.row; if (e.kind !== 'opera' || x.side !== 'D' || !(x.amt < 0)) continue;
         const p = ex.find(f => f !== e && (f.kind === 'opera' || f.kind === 'prior') && f.row.side === 'D' && f.row.amt > 0 && f.row.room === x.room && f.row.cashier === x.cashier && Math.abs(mins(f.row.time) - mins(x.time)) <= 10);
-        if (p) { e.kind = 'correction'; e.pairD = p.row; e.hint = `Correction${x.by ? ' by ' + x.by : ''}: ${$(x.amt)} at ${x.time}, re-posted as ${$(p.row.amt)} at ${p.row.time} (Rm ${x.room}). The ${$(-x.amt)} it reverses is not on tonight's D140, so it was posted on an earlier night. Nothing to post.`; }
+        if (p) { e.kind = 'correction'; e.pairD = p.row; e.hint = `Correction${x.by ? ' by ' + x.by : ''}: ${$(x.amt)} at ${x.time}, re-posted as ${$(p.row.amt)} at ${p.row.time} (${loc(x)}). The ${$(-x.amt)} it reverses is not on tonight's D140, so it was posted on an earlier night. Nothing to post.`; }
       }
       // Later D140s (audit done a few days late): find what was posted, reversed or completed afterwards.
       const fu = F[dept], fuUsed = new Set();
       const later = (amt, l4) => { const c = fu.filter(z => !fuUsed.has(z) && cents(z.amt) === cents(amt)); const z = l4 ? c.find(z => z.l4 === l4) || (c.length === 1 && !c[0].l4 ? c[0] : null) : (c.length === 1 ? c[0] : null); if (z) fuUsed.add(z); return z; };
-      const onD = z => `${fmtD(z.bd)} ${z.time}${z.by ? ' by ' + z.by : ''} (Rm ${z.room}, ${z.name}, page ${z.page})`;
+      const onD = z => `${fmtD(z.bd)} ${z.time}${z.by ? ' by ' + z.by : ''} (Rm ${z.room}, ${z.name}, D140 page ${z.page})`;
       const codeNote = (z, y) => codeType(z.code) !== y.type ? ` It went under ${z.code} ${codeType(z.code)}; it should be ${codeFor(dept, y.type)} ${y.type}.` : '';
       for (const y of completedLater) { const z = later(y.amt, y.l4); if (z) y.confirm = z; }
       for (const e of ex) {
@@ -458,6 +463,32 @@ const Engine = (() => {
       const other = out[dept === 'FO' ? 'F&B' : 'FO'];
       // Charges on this department's terminals that belong to the other department (shown for information).
       r.crossOut = other && !other.skip ? other.crossIn.filter(c => c.t.home === dept) : [];
+    }
+    // Real-life view: each department's terminals as their own terminal report shows them. A charge taken on
+    // this department's terminal stays here even when it is posted (and matched) in the other department.
+    //   tTerm  = terminal report total        vTerm = tTerm - Opera (what you see comparing the paper slips)
+    //   xNet   = part of vTerm that is only the other department's charges (not a difference)
+    //   variance (unchanged) = vTerm - xNet, the real difference still to explain.
+    // Terminal tiles, the recon sheet and the terminal view (terms, termTot, sheet, tRows) use the same rows.
+    const phys = {};
+    for (const dept of ['FO', 'F&B']) {
+      const r = out[dept]; if (!r || r.skip) continue;
+      const other = out[dept === 'FO' ? 'F&B' : 'FO'], o = other && !other.skip ? other.tRows : [];
+      phys[dept] = r.tRows.filter(y => y.home === dept || !other || other.skip).concat(o.filter(y => y.home === dept));
+    }
+    for (const dept of Object.keys(phys)) {
+      const r = out[dept], rows = phys[dept];
+      r.tTerm = rows.reduce((a, y) => a + y.amt, 0); r.xNet = r.tTerm - r.tTot; r.vTerm = r.variance + r.xNet;
+      if (!cents(r.xNet) && rows.length === r.tRows.length) continue;
+      r.tRows = rows;
+      for (const ty of Object.keys(r.sheet)) { r.sheet[ty].t = {}; r.sheet[ty].tt = 0; }
+      r.termTot = {}; r.termOrg = {}; r.termName = {};
+      for (const y of rows) {
+        const s = r.sheet[y.type] = r.sheet[y.type] || { t: {}, tt: 0, op: 0 };
+        s.t[y.term] = (s.t[y.term] || 0) + y.amt; s.tt += y.amt;
+        r.termTot[y.term] = (r.termTot[y.term] || 0) + y.amt; r.termOrg[y.term] = y.org; r.termName[y.term] = y.tn;
+      }
+      r.terms = [...new Set(rows.map(y => y.term))].sort((a, b) => String(r.termName[a]).localeCompare(String(r.termName[b]), undefined, { numeric: true }));
     }
     return out;
   }
