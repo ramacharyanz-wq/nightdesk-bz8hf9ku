@@ -1,4 +1,6 @@
-/* Card Recon PDF report (jsPDF + autotable) */
+/* Card Recon PDF report (jsPDF + autotable)
+   Style: one typeface (Helvetica), small sizes, straight lines only (no rounded boxes, pills or bullets),
+   dark grey text, one accent colour for differences (red) and green only for the BALANCED status. */
 const Report = (() => {
   const clean = t => String(t ?? '').replace(/−/g, '-').replace(/[–—]/g, '-').replace(/[‘’]/g, "'").replace(/[^\x00-\xFF]/g, '');
   const pm = n => (n < -0.004 ? '-' : '') + '$' + Math.abs(n).toLocaleString('en-NZ', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -10,138 +12,161 @@ const Report = (() => {
   const sd = b => b ? new Date(b + 'T12:00:00').toLocaleDateString('en-NZ', { day: 'numeric', month: 'short' }) : '';
 
   // Logo: two overlapping rounded squares, the matched area in amber.
-  function logo(doc, x, y, s, NAVY, AMB) {
+  function logo(doc, x, y, s) {
     const k = s / 512;
     doc.setFillColor(36, 52, 92); doc.roundedRect(x, y, s, s, 112 * k, 112 * k, 'F');
     doc.setLineWidth(26 * k);
     doc.setDrawColor(244, 245, 240); doc.roundedRect(x + 120 * k, y + 120 * k, 196 * k, 196 * k, 44 * k, 44 * k, 'S');
     doc.setDrawColor(130, 142, 166); doc.roundedRect(x + 196 * k, y + 196 * k, 196 * k, 196 * k, 44 * k, 44 * k, 'S');
-    doc.setFillColor(...AMB); doc.roundedRect(x + 196 * k, y + 196 * k, 120 * k, 120 * k, 18 * k, 18 * k, 'F');
+    doc.setFillColor(255, 200, 97); doc.roundedRect(x + 196 * k, y + 196 * k, 120 * k, 120 * k, 18 * k, 18 * k, 'F');
   }
   function build(res, meta = {}) {
     const { jsPDF } = window.jspdf; const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
     const W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight(), M = 36;
-    const NAVY = [18, 29, 51], INK = [20, 32, 58], MUTE = [90, 104, 134], AMB = [255, 200, 97], SKY = [61, 99, 216], LINE = [217, 224, 238], SOFT = [244, 246, 251], RED = [210, 59, 59], GRN = [17, 144, 90], REDS = [252, 232, 232], GRNS = [226, 244, 235], ORG = [166, 90, 0];
-    // Variance colour: terminals more than Opera = orange, less = red, nil = green
-    const OVR = [166, 90, 0], OVRS = [254, 240, 222];
-    const vcol = v => cents(v) === 0 ? GRN : v > 0 ? OVR : RED, vsoft = v => cents(v) === 0 ? GRNS : v > 0 ? OVRS : REDS;
+    const INK = [28, 32, 38], MUTE = [110, 116, 126], LINE = [222, 225, 230], RULE = [150, 156, 166], HEAD = [243, 244, 246], RED = [176, 32, 32], REDS = [251, 240, 240], GRN = [22, 110, 60];
+    // Red marks money still unexplained (r.variance); explained or nil amounts stay plain text.
+    const vcol = v => cents(v) === 0 ? INK : RED;
+    const TOP = 62, BOTTOM = 44;   // content area between the page header and footer
     const depts = Object.entries(res).filter(([, r]) => !r.skip);
     const bd = depts[0]?.[1].bd;
     const dayTxt = bd ? new Date(bd + 'T12:00:00').toLocaleDateString('en-NZ', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) : '';
     const batch = depts.map(([, r]) => r.tBatch).find(Boolean);
     const gen = new Date().toLocaleString('en-NZ', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
-    const table = o => { doc.autoTable(Object.assign({ margin: { left: M, right: M, top: 76, bottom: 46 }, theme: 'grid',
-      styles: { font: 'helvetica', fontSize: 8.2, cellPadding: { top: 4.5, bottom: 4.5, left: 6, right: 6 }, textColor: INK, lineColor: LINE, lineWidth: 0.5, overflow: 'linebreak', valign: 'middle' },
-      headStyles: { fillColor: NAVY, textColor: 255, fontStyle: 'bold', fontSize: 7.8 }, alternateRowStyles: { fillColor: [250, 251, 253] } }, o)); return doc.lastAutoTable.finalY; };
-    const h2 = (t, y) => { doc.setFillColor(...AMB); doc.rect(M, y - 9, 3, 12, 'F'); doc.setFont('helvetica', 'bold'); doc.setFontSize(12); doc.setTextColor(...INK); doc.text(clean(t), M + 10, y); return y + 10; };
-    const note = (t, y) => { doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5); doc.setTextColor(...MUTE); const ls = doc.splitTextToSize(clean(t), W - 2 * M); doc.text(ls, M, y); return y + ls.length * 11; };
-    const need = (y, h) => { if (y + h > H - 50) { doc.addPage(); return 96; } return y; };
+    const font = (size, style = 'normal', col = INK) => { doc.setFont('helvetica', style); doc.setFontSize(size); doc.setTextColor(...col); };
 
-    /* page 1 */
-    let y = 104;
-    doc.setFont('helvetica', 'bold'); doc.setFontSize(22); doc.setTextColor(...INK); doc.text('Card Reconciliation', M, y);
-    doc.setFont('helvetica', 'normal'); doc.setFontSize(10.5); doc.setTextColor(...MUTE);
-    doc.text(clean(`${dayTxt}${batch ? '   |   Batch ' + batch : ''}`), M, y + 19);
-    y += 42;
-    const cw = (W - 2 * M - 18) / 2, ch = depts.some(([, r]) => cents(r.xNet || 0)) ? 182 : 168;
-    depts.forEach(([dept, r], i) => {
-      const x = M + i * (cw + 18), top = y, nil = cents(r.variance) === 0;
-      doc.setFillColor(...SOFT); doc.roundedRect(x, top, cw, ch, 8, 8, 'F');
-      doc.setFillColor(...vcol(r.variance)); doc.roundedRect(x, top, 6, ch, 3, 3, 'F'); doc.rect(x + 3, top, 3, ch, 'F');
-      doc.setFont('helvetica', 'bold'); doc.setFontSize(14); doc.setTextColor(...INK); doc.text(dept === 'FO' ? 'Front Office' : 'Food & Beverage', x + 22, top + 30);
-      const bad = r.trust && !r.trust.ok, pill = bad ? 'NOT RELIABLE - CHECK FILES' : nil ? 'BALANCED' + (cents(r.xNet || 0) ? ' WITH VARIANCE ' + pm(r.xNet) : '') : 'OUT ' + pm(r.variance); doc.setFontSize(8.5); const pw = doc.getTextWidth(pill) + 20;
-      doc.setFillColor(...(bad ? REDS : vsoft(r.variance))); doc.roundedRect(x + cw - 18 - pw, top + 16, pw, 19, 9.5, 9.5, 'F'); doc.setTextColor(...(bad ? RED : vcol(r.variance))); doc.text(pill, x + cw - 18 - pw / 2, top + 28.5, { align: 'center' });
-      const fw = (cw - 40) / 3;
-      const fig = (k, v, cx, col) => { doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(...MUTE); doc.text(k, cx, top + 60); doc.setFont('helvetica', 'bold'); doc.setFontSize(15); doc.setTextColor(...(col || INK)); doc.text(v, cx, top + 80); };
-      const xv = r.variance + (r.xNet || 0); fig('Terminals', pm(r.tTot + (r.xNet || 0)), x + 22); fig('Opera D140', pm(r.dTot), x + 22 + fw); fig('Variance', cents(xv) ? pm(xv) : '0.00', x + 22 + 2 * fw, vcol(xv));
-      doc.setDrawColor(...LINE); doc.setLineWidth(0.8); doc.line(x + 22, top + 96, x + cw - 18, top + 96);
-      const fix = r.ex.filter(e => e.kind !== 'dup' && e.kind !== 'missing' && !e.settled).length;
-      const nck = (r.checks || []).length; const pts = [...(cents(r.xNet || 0) ? [`${pm(r.xNet)} is the other department's charges on these terminals; still open ${pm(r.variance)}`] : []), `${fix} item${fix === 1 ? '' : 's'} to fix${nck ? `, ${nck} to check (balance on amount only)` : ''}`, `${r.wrong.length} posting${r.wrong.length === 1 ? '' : 's'} on the wrong card code`, `${r.matches.length} matched transactions${(r.crossIn || []).length + (r.crossOut || []).length ? `, ${(r.crossIn || []).length + (r.crossOut || []).length} on the other department's terminal` : ''}`];
+    // Tables: light header, horizontal rules only, rows never split across pages, headings aligned like their column.
+    const table = o => {
+      const cs = o.columnStyles || {}, user = o.didParseCell;
+      doc.autoTable(Object.assign({}, o, {
+        margin: { left: M, right: M, top: TOP, bottom: BOTTOM }, theme: 'plain', rowPageBreak: 'avoid',
+        styles: { font: 'helvetica', fontSize: 7.6, cellPadding: { top: 3.6, bottom: 3.6, left: 4, right: 4 }, textColor: INK, lineColor: LINE, lineWidth: { bottom: 0.4 }, overflow: 'linebreak', valign: 'top' },
+        headStyles: { fillColor: HEAD, textColor: INK, fontStyle: 'bold', fontSize: 7.2, lineColor: RULE, lineWidth: { bottom: 0.7 }, valign: 'bottom' },
+        didParseCell: d => { if (d.section === 'head' && cs[d.column.index]?.halign) d.cell.styles.halign = cs[d.column.index].halign; if (user) user(d); }
+      }));
+      return doc.lastAutoTable.finalY;
+    };
+    const NUM = { cellWidth: 22, halign: 'right' };   // the "#" column
+    const h2 = (t, y) => { font(10, 'bold'); doc.text(clean(t), M, y); return y + 7; };
+    const note = (t, y) => { font(7.8, 'normal', MUTE); const ls = doc.splitTextToSize(clean(t), W - 2 * M); doc.text(ls, M, y); return y + ls.length * 10; };
+    const need = (y, h) => { if (y + h > H - BOTTOM - 4) { doc.addPage(); return TOP + 12; } return y; };
+    const box = (t, y, col, fill) => { font(7.8, 'normal', col); const ls = doc.splitTextToSize(clean(t), W - 2 * M - 20); const bh = ls.length * 10 + 10; doc.setFillColor(...fill); doc.rect(M, y, W - 2 * M, bh, 'F'); doc.setFillColor(...col); doc.rect(M, y, 1.5, bh, 'F'); doc.text(ls, M + 10, y + 13); return y + bh + 12; };
+    const statusOf = r => r.trust && !r.trust.ok ? ['CHECK FILES - NOT RELIABLE', RED] : cents(r.variance) === 0 ? ['BALANCED' + (cents(r.xNet || 0) ? ' WITH VARIANCE ' + pm(r.xNet) : ''), GRN] : ['OUT ' + pm(r.variance), RED];
+
+    /* page 1: summary */
+    let y = TOP + 18;
+    font(16, 'bold'); doc.text('Card Reconciliation', M, y);
+    font(9, 'normal', MUTE); doc.text(clean(`${dayTxt}${batch ? '   |   Batch ' + batch : ''}`), M, y + 15);
+    y += 40;
+    const cw = (W - 2 * M - 28) / 2;
+    const ptsOf = r => {
+      const fix = r.ex.filter(e => e.kind !== 'dup' && e.kind !== 'missing' && !e.settled).length, nck = (r.checks || []).length, nx = (r.crossIn || []).length + (r.crossOut || []).length;
+      const pts = [];
+      if (cents(r.xNet || 0)) pts.push(`Other department's charges ${pm(r.xNet)}; still open ${pm(r.variance)}`);
+      pts.push(`${fix} item${fix === 1 ? '' : 's'} to fix${nck ? `, ${nck} to check (balance on amount only)` : ''}`);
+      pts.push(`${r.wrong.length} posting${r.wrong.length === 1 ? '' : 's'} on the wrong card code`);
+      pts.push(`${r.matches.length} matched transactions${nx ? `, ${nx} on the other department's terminal` : ''}`);
       if ((r.followUp || []).length && cents(r.cleared)) pts.push(`${pm(r.cleared)} posted or reversed later; still open ${pm(r.variance - r.cleared)}`);
       if ((r.completedLater || []).length) pts.push(`${r.completedLater.length} pre-auths completed after this date, not counted`);
       if (r.checkable !== null) pts.push(`Checkable variance ${pm(r.checkable)} (export incomplete)`);
-      doc.setFont('helvetica', 'normal'); doc.setFontSize(9.2); doc.setTextColor(...INK);
-      pts.forEach((t, j) => { const py = top + 114 + j * 14; doc.setFillColor(...AMB); doc.circle(x + 26, py - 3, 2, 'F'); doc.text(clean(t), x + 34, py); });
+      return pts;
+    };
+    const maxPts = Math.max(1, ...depts.map(([, r]) => ptsOf(r).length));
+    depts.forEach(([dept, r], i) => {
+      const x = M + i * (cw + 28), top = y, [st, sc] = statusOf(r);
+      doc.setDrawColor(...INK); doc.setLineWidth(1); doc.line(x, top, x + cw, top);
+      font(10.5, 'bold'); doc.text(dept === 'FO' ? 'Front Office' : 'Food & Beverage', x, top + 16);
+      font(7.8, 'bold', sc); doc.text(clean(st), x + cw, top + 16, { align: 'right' });
+      const xv = r.variance + (r.xNet || 0), fw = cw / 3;
+      [['Terminals', pm(r.tTot + (r.xNet || 0)), INK], ['Opera D140', pm(r.dTot), INK], ['Variance', cents(xv) ? pm(xv) : '0.00', vcol(r.variance)]].forEach(([k, v, c], j) => {
+        font(7.4, 'normal', MUTE); doc.text(k, x + j * fw, top + 36);
+        font(12, 'bold', c); doc.text(v, x + j * fw, top + 51);
+      });
+      doc.setDrawColor(...LINE); doc.setLineWidth(0.5); doc.line(x, top + 62, x + cw, top + 62);
+      font(8.2); ptsOf(r).forEach((t, j) => doc.text(clean(t), x, top + 77 + j * 12));
     });
-    y += ch + 34;
-    doc.setFont('helvetica', 'bold'); doc.setFontSize(10.5); doc.setTextColor(...INK); doc.text('Sign-off', M, y); y += 8;
-    doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5); doc.setTextColor(...MUTE); doc.text('Comments', M, y + 16);
-    doc.setDrawColor(...LINE); doc.setLineWidth(0.6); doc.line(M + 52, y + 17, W - M, y + 17); doc.line(M, y + 38, W - M, y + 38); y += 72;
+    y += 77 + maxPts * 12 + 22;
+    font(10, 'bold'); doc.text('Sign-off', M, y);
+    font(7.8, 'normal', MUTE); doc.text('Comments', M, y + 20);
+    doc.setDrawColor(...LINE); doc.setLineWidth(0.5); doc.line(M + 48, y + 21, W - M, y + 21); doc.line(M, y + 42, W - M, y + 42);
+    y += 86;
     const sw = (W - 2 * M - 40) / 3;
-    ['Night Auditor', 'Night Manager', 'Rooms Division Manager'].forEach((t, i) => { const sx = M + i * (sw + 20); doc.setDrawColor(...INK); doc.line(sx, y, sx + sw, y); doc.setFontSize(8); doc.setTextColor(...MUTE); doc.text(t, sx, y + 12); doc.text('Signature / date', sx + sw, y + 12, { align: 'right' }); });
+    ['Night Auditor', 'Night Manager', 'Rooms Division Manager'].forEach((t, i) => { const sx = M + i * (sw + 20); doc.setDrawColor(...RULE); doc.setLineWidth(0.6); doc.line(sx, y, sx + sw, y); font(7.4, 'normal', MUTE); doc.text(t, sx, y + 11); doc.text('Signature / date', sx + sw, y + 11, { align: 'right' }); });
 
     /* department pages */
     for (const [dept, r] of depts) {
-      doc.addPage(); let y = 98;
-      doc.setFont('helvetica', 'bold'); doc.setFontSize(17); doc.setTextColor(...INK); doc.text(dept === 'FO' ? 'Front Office' : 'Food & Beverage', M, y);
-      doc.setFont('helvetica', 'normal'); doc.setFontSize(9.5); doc.setTextColor(...MUTE);
-      doc.text(clean(`Terminals ${pm(r.tTot + (r.xNet || 0))}    Opera D140 ${pm(r.dTot)}    Variance ${cents(r.variance + (r.xNet || 0)) === 0 ? 'NIL' : pm(r.variance + (r.xNet || 0))}${cents(r.xNet || 0) ? `    Other department ${pm(r.xNet)}    Still open ${cents(r.variance) === 0 ? 'NIL' : pm(r.variance)}` : ''}`), M, y + 16);
-      y += 38;
-      if (r.trust && !r.trust.ok) { doc.setFontSize(8.5); const ls = doc.splitTextToSize(clean("This result can't be trusted yet. " + r.trust.reasons.join(' ')), W - 2 * M - 24); const bh = ls.length * 11 + 14; doc.setFillColor(...REDS); doc.roundedRect(M, y - 10, W - 2 * M, bh, 4, 4, 'F'); doc.setTextColor(...RED); doc.text(ls, M + 12, y + 2); y += bh + 14; }
-      if (r.warn) { doc.setFontSize(8.5); const ls = doc.splitTextToSize(clean(r.warn), W - 2 * M - 24); const bh = ls.length * 11 + 14; doc.setFillColor(255, 236, 224); doc.roundedRect(M, y - 10, W - 2 * M, bh, 4, 4, 'F'); doc.setTextColor(...ORG); doc.text(ls, M + 12, y + 2); y += bh + 14; }
-      y = h2('Recon sheet', y) + 4;
+      doc.addPage(); let y = TOP + 16;
+      const [st, sc] = statusOf(r), xv = r.variance + (r.xNet || 0);
+      font(13, 'bold'); doc.text(dept === 'FO' ? 'Front Office' : 'Food & Beverage', M, y);
+      font(7.8, 'bold', sc); doc.text(clean(st), W - M, y, { align: 'right' });
+      font(8.2, 'normal', MUTE);
+      doc.text(clean(`Terminals ${pm(r.tTot + (r.xNet || 0))}     Opera D140 ${pm(r.dTot)}     Variance ${cents(xv) === 0 ? 'nil' : pm(xv)}${cents(r.xNet || 0) ? `     Other department ${pm(r.xNet)}     Still open ${cents(r.variance) === 0 ? 'nil' : pm(r.variance)}` : ''}`), M, y + 14);
+      y += 34;
+      if (r.trust && !r.trust.ok) y = box("This result can't be trusted yet. " + r.trust.reasons.join(' '), y, RED, REDS);
+      if (r.warn) y = box(r.warn, y, INK, HEAD);
+      y = h2('Recon sheet', y + 4);
       const types = Object.keys(r.sheet).filter(ty => ['EFTPOS', 'MC', 'VISA', 'Union Pay', 'Amex', 'AliPay & WeChat', 'JCB'].includes(ty) || r.sheet[ty].tt || r.sheet[ty].op);
       const body = types.map(ty => { const o = r.sheet[ty]; return [ty, Engine.codeFor(dept, ty), ...r.terms.map(t => pn(o.t[t] || 0)), pn0(o.tt), pn0(o.op), pn0(o.tt - o.op)]; });
-      body.push(['TOTAL', '', ...r.terms.map(t => pn0(r.termTot[t] || 0)), pn0(r.tTot + (r.xNet || 0)), pn0(r.dTot), pn0(r.variance + (r.xNet || 0))]);
-      const nc = 2 + r.terms.length + 3; const cs = { 0: { fontStyle: 'bold', cellWidth: 96 }, 1: { cellWidth: 52 } }; for (let i = 2; i < nc; i++) cs[i] = { halign: 'right' };
+      body.push(['Total', '', ...r.terms.map(t => pn0(r.termTot[t] || 0)), pn0(r.tTot + (r.xNet || 0)), pn0(r.dTot), pn0(xv)]);
+      const nc = 2 + r.terms.length + 3; const cs = { 0: { cellWidth: 92 }, 1: { cellWidth: 46 } }; for (let i = 2; i < nc; i++) cs[i] = { halign: 'right' };
       y = table({ startY: y, head: [['Card type', 'Code', ...r.terms.map(t => clean((r.termName && r.termName[t]) || "Terminal " + t)), "Terminals", "Opera D140", "Variance"]], body, columnStyles: cs,
-        didParseCell: d => { if (d.section !== 'body') return; if (d.row.index === body.length - 1) { d.cell.styles.fontStyle = 'bold'; d.cell.styles.fillColor = SOFT; } if (d.column.index === nc - 1 && d.cell.raw !== "0.00") { const rv = d.row.index === body.length - 1 ? r.variance + (r.xNet || 0) : r.sheet[types[d.row.index]].tt - r.sheet[types[d.row.index]].op; d.cell.styles.textColor = vcol(rv); d.cell.styles.fontStyle = 'bold'; } } });
-      if (r.wrong.length) y = note('Card-type differences come from postings on the wrong card code. They cancel out in the total.', y + 14);
-      y = need(y + 20, 80);
+        didParseCell: d => { if (d.section !== 'body' || d.row.index !== body.length - 1) return; d.cell.styles.fontStyle = 'bold'; d.cell.styles.fillColor = HEAD; d.cell.styles.lineWidth = { top: 0.7, bottom: 0.7 }; d.cell.styles.lineColor = RULE; if (d.column.index === nc - 1) d.cell.styles.textColor = vcol(r.variance); } });
+      if (r.wrong.length) y = note('Card-type differences come from postings on the wrong card code. They cancel out in the total.', y + 11) - 10;
       const fixes = r.ex.filter(e => e.kind !== 'dup' && e.kind !== 'missing' && !e.settled), rest = r.ex.filter(e => (e.kind === 'dup' || e.kind === 'missing') && !e.settled), late = r.ex.filter(e => e.settled);
+      const where = (p, pre = '') => clean(`${pre}Page ${p.page}  Rm ${p.room}\n${p.name}`);
       const exTable = (list, y) => table({ startY: y, head: [['#', 'What', 'Amount', 'Effect', 'Terminal', 'D140', 'Action']],
         body: list.map((e, i) => { const x = e.row, T = x.side === 'T'; const P = e.pair || (T ? e.late : null); return [i + 1, kindOf(e), pm(x.amt), e.kind === 'dup' ? 'none' : pm(e.effect),
-          T ? clean(`${x.tn || x.term}\n${x.time}  ${x.type} ..${x.l4}\nRRN ${x.rrn}`) : '-', T ? (P ? clean(`${P.bd ? sd(P.bd) + ' D140  ' : ''}Page ${P.page}  Room ${P.room}\n${P.name}\nPosted ${P.amt.toFixed(2)}${P.by ? ' by ' + P.by : ''}`) : '-') : clean(`Page ${x.page}  Room ${x.room}\n${x.name}${x.receipt ? '\n#' + x.receipt : ''}\n${x.code} ${Engine.codeType(x.code)}${x.by ? '\nby ' + x.by : ''}`), clean(e.hint)]; }),
-        columnStyles: { 0: { cellWidth: 20, halign: 'center' }, 1: { cellWidth: 96, fontStyle: 'bold' }, 2: { cellWidth: 60, halign: 'right' }, 3: { cellWidth: 56, halign: 'right' }, 4: { cellWidth: 128 }, 5: { cellWidth: 140 } },
-        didParseCell: d => { if (d.section === 'body' && d.column.index === 1) { const e = list[d.row.index]; d.cell.styles.textColor = e.kind === "dup" || !cents(e.effect) ? MUTE : vcol(e.effect); } if (d.section === "body" && d.column.index === 3) { const e = list[d.row.index]; if (e.kind !== "dup" && cents(e.effect)) { d.cell.styles.textColor = vcol(e.effect); d.cell.styles.fontStyle = "bold"; } } } });
-      y = h2(`To fix (${fixes.length})`, y) + 4;
-      y = fixes.length ? exTable(fixes, y) : note('Nothing to fix. Every posting matches a terminal transaction.', y + 8);
-      if (rest.length) { y = need(y + 20, 80); y = h2(`Cannot be checked with this export (${rest.length})`, y) + 4; y = exTable(rest, y); }
-      if (late.length) { y = need(y + 20, 80); y = h2(`Explained, nothing to post (${late.length})`, y) + 4; y = note('Still a difference on this night\'s D140, but explained: posted or reversed on another night, or corrected. Nothing to post now.', y + 8) - 2; y = exTable(late, y); }
+          T ? clean(`${x.tn || x.term}\n${x.time}  ${x.type} ..${x.l4}\nRRN ${x.rrn}`) : '-',
+          T ? (P ? where(P, P.bd ? sd(P.bd) + ' D140  ' : '') + clean(`\nPosted ${P.amt.toFixed(2)}${P.by ? ' by ' + P.by : ''}`) : '-') : where(x) + clean(`${x.receipt ? '\n#' + x.receipt : ''}\n${x.code} ${Engine.codeType(x.code)}${x.by ? '\nby ' + x.by : ''}`), clean(e.hint)]; }),
+        columnStyles: { 0: NUM, 1: { cellWidth: 104, fontStyle: 'bold' }, 2: { cellWidth: 58, halign: 'right' }, 3: { cellWidth: 56, halign: 'right' }, 4: { cellWidth: 118 }, 5: { cellWidth: 132 } },
+        didParseCell: d => { if (d.section !== 'body') return; const e = list[d.row.index]; if (d.column.index === 1 && (e.kind === 'dup' || !cents(e.effect))) d.cell.styles.textColor = MUTE; if (d.column.index === 3 && e.kind !== 'dup' && cents(e.effect)) { d.cell.styles.textColor = RED; d.cell.styles.fontStyle = 'bold'; } } });
+      const section = (title, minH = 70) => { y = need(y + 22, minH); y = h2(title, y); };
+      const intro = t => { y = note(t, y + 4) - 2; };
+      section(`To fix (${fixes.length})`);
+      y = fixes.length ? exTable(fixes, y) : note('Nothing to fix. Every posting matches a terminal transaction.', y + 4) - 6;
+      if (rest.length) { section(`Cannot be checked with this export (${rest.length})`); y = exTable(rest, y); }
+      if (late.length) { section(`Explained, nothing to post (${late.length})`); intro('Still a difference on this night\'s D140, but explained: posted or reversed on another night, or corrected. Nothing to post now.'); y = exTable(late, y); }
       const dl = r.completedLater || [];
-      if (dl.length) { y = need(y + 20, 80); y = h2(`Completed after this date, not counted (${dl.length}, ${pm(dl.reduce((a, t) => a + t.amt, 0))})`, y) + 4;
-        y = note('Pre-auths taken on this date whose amount changed when they were completed later, usually at check-out. The export shows them under the pre-auth\'s date.' + ((r.followUp || []).length ? '' : ' Confirm each on the next D140 or by RRN in the portal.'), y + 8) - 2;
-        y = table({ startY: y, head: [['Terminal', 'Time', 'Card', 'RRN', 'Pre-auth', 'Completed', 'Later D140']], body: dl.map(t => [clean(t.tn), t.time, clean(`${t.type} ..${t.l4}`), t.rrn || '', pm(t.orig), pm(t.amt), t.confirm ? clean(`Posted ${sd(t.confirm.bd)} ${t.confirm.time}  Room ${t.confirm.room}  ${t.confirm.name}`) : 'To confirm']), columnStyles: { 4: { halign: 'right' }, 5: { halign: 'right', fontStyle: 'bold' } } }); }
+      if (dl.length) { section(`Completed after this date, not counted (${dl.length}, ${pm(dl.reduce((a, t) => a + t.amt, 0))})`);
+        intro('Pre-auths taken on this date whose amount changed when they were completed later, usually at check-out. The export shows them under the pre-auth\'s date.' + ((r.followUp || []).length ? '' : ' Confirm each on the next D140 or by RRN in the portal.'));
+        y = table({ startY: y, head: [['Terminal', 'Time', 'Card', 'RRN', 'Pre-auth', 'Completed', 'Later D140']], body: dl.map(t => [clean(t.tn), t.time, clean(`${t.type} ..${t.l4}`), t.rrn || '', pm(t.orig), pm(t.amt), t.confirm ? clean(`Posted ${sd(t.confirm.bd)} ${t.confirm.time}  Rm ${t.confirm.room}  ${t.confirm.name}`) : 'To confirm']), columnStyles: { 4: { halign: 'right' }, 5: { halign: 'right', fontStyle: 'bold' } } }); }
       const ck = r.checks || [];
       if (ck.length) {
-        y = need(y + 20, 80); y = h2(`Check these (${ck.length})`, y) + 4;
-        y = note('These balance only on amount. They may be fine, or two separate mistakes that cancel out. Confirm it is the same guest and payment.', y + 8) - 2;
+        section(`Check these (${ck.length})`); intro('These balance only on amount. They may be fine, or two separate mistakes that cancel out. Confirm it is the same guest and payment.');
         y = table({ startY: y, head: [['#', 'Why', 'Terminal', 'D140']],
-          body: ck.map((m, i) => [i + 1, clean(m.why), clean(m.t.map(t => `${t.tn}  ${t.time}  ${t.type} ..${t.l4}  ${t.amt.toFixed(2)}`).join('\n')), clean(m.d.map(x => `Page ${x.page}  Room ${x.room}  ${x.name}  ${x.code}${x.l4 ? ' ..' + x.l4 : ''}  ${x.amt.toFixed(2)}${x.by ? '  by ' + x.by : ''}`).join('\n'))]),
-          columnStyles: { 0: { cellWidth: 20, halign: 'center' }, 1: { cellWidth: 170, fontStyle: 'bold', textColor: ORG } } });
+          body: ck.map((m, i) => [i + 1, clean(m.why), clean(m.t.map(t => `${t.tn}  ${t.time}  ${t.type} ..${t.l4}  ${t.amt.toFixed(2)}`).join('\n')), clean(m.d.map(x => `Page ${x.page}  Rm ${x.room}  ${x.name}  ${x.code}${x.l4 ? ' ..' + x.l4 : ''}  ${x.amt.toFixed(2)}${x.by ? '  by ' + x.by : ''}`).join('\n'))]),
+          columnStyles: { 0: NUM, 1: { cellWidth: 190 } } });
       }
       const on = r.otherNight || [], ncp = r.nonCard || [];
-      if (on.length) { y = need(y + 20, 60); y = h2(`From another night, not counted (${on.length})`, y) + 4;
+      if (on.length) { section(`From another night, not counted (${on.length})`, 60);
         y = table({ startY: y, head: [['Terminal', 'Batch', 'Date / time', 'Card', 'Amount']], body: on.map(t => [clean(t.tn), t.batch || '', `${t.date || ''} ${t.time}`, clean(`${t.type} ..${t.l4}`), pm(t.amt)]), columnStyles: { 4: { halign: 'right' } } }); }
-      if (ncp.length) { y = need(y + 20, 60); y = h2(`Not card payments, not checked (${ncp.length})`, y) + 4;
-        y = table({ startY: y, head: [['Code', 'Guest', 'Room', 'Page', 'Amount']], body: ncp.map(x => [x.code, clean(x.name), x.room, x.page, pm(x.amt)]), columnStyles: { 4: { halign: 'right' } } }); }
+      if (ncp.length) { section(`Not card payments, not checked (${ncp.length})`, 60);
+        y = table({ startY: y, head: [['Code', 'Guest', 'Rm', 'Page', 'Amount']], body: ncp.map(x => [x.code, clean(x.name), x.room, x.page, pm(x.amt)]), columnStyles: { 0: { cellWidth: 60 }, 2: { cellWidth: 60 }, 3: { cellWidth: 50 }, 4: { cellWidth: 80, halign: 'right' } } }); }
       const xi = r.crossIn || [], xo = r.crossOut || [];
       if (xi.length || xo.length) {
-        y = need(y + 20, 80); y = h2(`Used another department's terminal (${xi.length + xo.length})`, y) + 4;
-        y = note('Nothing to fix in Opera. Each charge is counted in the department where it was posted.', y + 8) - 2;
+        section(`Used another department's terminal (${xi.length + xo.length})`); intro('Nothing to fix in Opera. Each charge is counted in the department where it was posted.');
         const dn = d => d === 'FO' ? 'Front Office' : 'F&B';
-        y = table({ startY: y, head: [['Charged on', 'Card', 'Amount', 'Counted in', 'D140', 'Guest / room']],
-          body: xi.concat(xo).map(c => [clean(`${c.t.tn}\n${c.t.org}  ${c.t.time}`), clean(`${c.t.type} ..${c.t.l4}`), pm(c.t.amt), dn(c.t.dept), c.d ? `Page ${c.d.page}${c.d.receipt ? '  #' + c.d.receipt : ''}` : '-', c.d ? clean(`${c.d.name}  Room ${c.d.room}`) : 'No posting matched']),
-          columnStyles: { 2: { halign: 'right', fontStyle: 'bold', textColor: SKY } } });
+        y = table({ startY: y, head: [['Charged on', 'Card', 'Amount', 'Counted in', 'D140', 'Guest / Rm']],
+          body: xi.concat(xo).map(c => [clean(`${c.t.tn}  ${c.t.org}  ${c.t.time}`), clean(`${c.t.type} ..${c.t.l4}`), pm(c.t.amt), dn(c.t.dept), c.d ? `Page ${c.d.page}${c.d.receipt ? '  #' + c.d.receipt : ''}` : '-', c.d ? clean(`${c.d.name}  Rm ${c.d.room}`) : 'No posting matched']),
+          columnStyles: { 2: { halign: 'right' } } });
       }
-      y = need(y + 20, 80);
-      y = h2(`Wrong card code (${r.wrong.length})`, y) + 4;
-      y = r.wrong.length ? table({ startY: y, head: [['#', 'Guest', 'Room', 'Page', 'Receipt', 'Amount', 'Posted on', 'Card used', 'Terminal', 'Move to']],
+      section(`Wrong card code (${r.wrong.length})`);
+      y = r.wrong.length ? table({ startY: y, head: [['#', 'Guest', 'Rm', 'Page', 'Receipt', 'Amount', 'Posted on', 'Card used', 'Terminal', 'Move to']],
         body: r.wrong.map((w, i) => [i + 1, clean(w.x.name + (w.x.by ? '\nby ' + w.x.by : '')), w.x.room, w.x.page, w.x.receipt ? '#' + w.x.receipt : clean(w.x.ref), pm(w.x.amt), `${w.x.code} ${w.from}`, `${w.to} ..${w.y.l4}`, `${(w.y.tn || w.y.term)}  ${w.y.time}`, `${w.toCode} ${w.to}`]),
-        columnStyles: { 0: { cellWidth: 20, halign: 'center' }, 2: { halign: 'center' }, 3: { halign: 'center' }, 5: { halign: 'right' }, 9: { fontStyle: 'bold', textColor: SKY } } }) : note('None.', y + 8);
-      if (r.offsets.length) { y = need(y + 20, 60); y = h2('Cancel out, no effect', y) + 4;
-        table({ startY: y, head: [['Where', 'Guest / card', 'Amounts', 'Find it']], body: r.offsets.map(o => [o.side, clean(o.side === 'Opera' ? `${o.a.name}  Room ${o.a.room}` : `${o.a.type} ..${o.a.l4}`), `${pm(o.a.amt)} / ${pm(o.b.amt)}`, o.side === 'Opera' ? `Page ${o.a.page} at ${o.a.time}, ${o.b.time}` : `${(o.a.tn || o.a.term)} ${o.a.time}, ${(o.b.tn || o.b.term)} ${o.b.time}`]), columnStyles: { 2: { halign: 'right' } } }); }
+        columnStyles: { 0: NUM, 2: { cellWidth: 40 }, 3: { cellWidth: 34 }, 5: { halign: 'right' }, 9: { fontStyle: 'bold' } } }) : note('None.', y + 6);
+      if (r.offsets.length) { section(`Cancel out, no effect (${r.offsets.length})`, 50);
+        y = table({ startY: y, head: [['Where', 'Guest / card', 'Amounts', 'Find it']], body: r.offsets.map(o => [o.side, clean(o.side === 'Opera' ? `${o.a.name}  Rm ${o.a.room}` : `${o.a.type} ..${o.a.l4}`), `${pm(o.a.amt)} / ${pm(o.b.amt)}`, o.side === 'Opera' ? `Page ${o.a.page} at ${o.a.time}, ${o.b.time}` : `${(o.a.tn || o.a.term)} ${o.a.time}, ${(o.b.tn || o.b.term)} ${o.b.time}`]), columnStyles: { 2: { halign: 'right' } } }); }
     }
-    /* header + footer */
+    /* page header + footer */
     const n = doc.getNumberOfPages();
+    const dateTxt = bd ? new Date(bd + 'T12:00:00').toLocaleDateString('en-NZ', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
     for (let i = 1; i <= n; i++) {
       doc.setPage(i);
-      doc.setFillColor(...NAVY); doc.rect(0, 0, W, 48, 'F'); doc.setFillColor(...AMB); doc.rect(0, 48, W, 3, 'F');
-      logo(doc, M, 11, 26, NAVY, AMB);
-      doc.setFont('helvetica', 'bold'); doc.setFontSize(12); doc.setTextColor(255, 255, 255); doc.text('Card Recon', M + 34, 28.5);
-      doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(200, 210, 230); doc.text(clean(`Night audit   |   ${bd ? new Date(bd + 'T12:00:00').toLocaleDateString('en-NZ', { day: 'numeric', month: 'short', year: 'numeric' }) : ''}`), W - M, 28.5, { align: 'right' });
-      doc.setDrawColor(...LINE); doc.setLineWidth(0.5); doc.line(M, H - 32, W - M, H - 32);
-      doc.setFontSize(7.5); doc.setTextColor(...MUTE); doc.text(clean(`Generated ${gen}   |   Payment gateway export vs Opera D140   |   Developed by Ram`), M, H - 20); doc.text(`Page ${i} of ${n}`, W - M, H - 20, { align: 'right' });
+      logo(doc, M, 17, 15);
+      font(9, 'bold'); doc.text('Card Recon', M + 21, 28);
+      font(7.8, 'normal', MUTE); doc.text(clean(`Night audit   |   ${dateTxt}`), W - M, 28, { align: 'right' });
+      doc.setDrawColor(...LINE); doc.setLineWidth(0.5); doc.line(M, 38, W - M, 38); doc.line(M, H - 36, W - M, H - 36);
+      font(7, 'bold'); doc.text('CONFIDENTIAL - contains guest and card details. Share only with authorised staff in your organisation.', M, H - 25);
+      font(7, 'normal', MUTE); doc.text(clean(`Generated ${gen}   |   Payment gateway export vs Opera D140   |   Developed by Ram`), M, H - 15); doc.text(`Page ${i} of ${n}`, W - M, H - 15, { align: 'right' });
     }
     return { doc, name: `Card-Recon-${bd || 'report'}.pdf` };
   }
