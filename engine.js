@@ -26,7 +26,7 @@ const Engine = (() => {
 
   /* ---------- D140 PDF ---------- */
   async function pdfLines(buf) {
-    const doc = await pdfjsLib.getDocument({ data: buf }).promise; const lines = [], pages = [], geo = [], sizes = [];
+    const doc = await pdfjsLib.getDocument({ data: buf, isEvalSupported: false }).promise; const lines = [], pages = [], geo = [], sizes = [];
     for (let p = 1; p <= doc.numPages; p++) {
       const pg = await doc.getPage(p), vp = pg.getViewport({ scale: 1 }); sizes.push({ w: vp.width, h: vp.height });
       const tc = await pg.getTextContent();
@@ -143,9 +143,13 @@ const Engine = (() => {
     for (const n of out) if (c[n.name] > 1) n.name += " ·" + dg(n.id).slice(-4);
     return out;
   }
-  // No terminal names are built into the public code. Import your terminal list in Settings on each device.
-  // A name saved in Settings for the same terminal wins over these.
+  // Built-in code names (owner, 27 Nov 2026): outlet code + the terminal ID's last 4 digits. The public code holds
+  // no outlet names and no full terminal IDs; a code name matches the export's terminal by its last 4 digits.
+  // A name saved or imported in Settings for the same terminal wins over these.
   const BUILT_IN = [
+    ['FO 4101', '4101', 'FO'], ['FO 4102', '4102', 'FO'], ['FO 4105', '4105', 'FO'], ['FO 4106', '4106', 'FO'], ['FO 4107', '4107', 'FO'], ['FO 4001', '4001', 'FO'],
+    ['Fou 4301', '4301', 'F&B'], ['Trv 4701', '4701', 'F&B'], ['Trv 4702', '4702', 'F&B'], ['Trv 4703', '4703', 'F&B'],
+    ['Kur 0501', '0501', 'F&B'], ['Kur 0502', '0502', 'F&B']
   ].map(([name, id, dept]) => ({ id, name, dept, builtIn: true }));
   const withBuiltIn = (names = []) => names.concat(BUILT_IN.filter(b => !names.some(n => dg(n.id) === b.id)));
   function termLookup(names = []) {
@@ -157,7 +161,7 @@ const Engine = (() => {
       // 8-digit ID with the padding zeros (12345602).
       const short = d => d.length === 12 && /^0+$/.test(d.slice(6, 10)) ? d.slice(0, 6) + d.slice(-2) : d;
       let hit = list.find(n => c.includes(n.d)) || (t.length === 8 && list.find(n => short(n.d) === t));
-      if (!hit && t.length >= 4) { const s = list.filter(n => n.d.endsWith(t) || (n.d.length >= 6 && t.endsWith(n.d))); if (s.length === 1) hit = s[0]; }
+      if (!hit && t.length >= 4) { const s = list.filter(n => n.d.endsWith(t) || ((n.d.length >= 6 || n.builtIn) && t.endsWith(n.d))); if (s.length === 1) hit = s[0]; }
       return (cache[k] = hit || null);
     };
   }
@@ -416,6 +420,8 @@ const Engine = (() => {
         // Later D140s loaded with this audit (date and postings), and how much of tonight's variance they explain.
         followUp: [...new Set(fu.map(z => z.bd))].sort(), cleared: ex.filter(e => e.late).reduce((a, e) => a + e.effect, 0),
         grandOk: pdfFile ? pdfFile.grandOk : true,
+        // Every terminal transaction counted tonight (the terminal tiles add these up), for the per-terminal view.
+        tRows: counted,
         tCount: counted.length, dCount: d.length, terms, termTot, termOrg, termName, sheet, wrong, matches, offsets, ex, dupRows, ignored: ignored[dept],
         // Charges taken on the other department's terminals and counted here, with the Opera posting they matched.
         crossIn: matches.flatMap(m => m.t.filter(y => y.home !== dept).map(y => ({ t: y, d: m.d[0] }))).concat(ex.filter(e => e.row.side === 'T' && e.row.home !== dept).map(e => ({ t: e.row, d: null })))

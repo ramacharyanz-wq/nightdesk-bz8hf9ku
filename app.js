@@ -24,6 +24,7 @@
     pos: s => I('<rect x="6" y="2.5" width="12" height="19" rx="2.5"/><rect x="8.5" y="5" width="7" height="4.5" rx="1"/><path d="M9 13h.01M12 13h.01M15 13h.01M9 16h.01M12 16h.01M15 16h.01"/>', s, 2),
     page: s => I('<path d="M6.5 3.5h11v17h-11z"/><path d="M9 8h6M9 11.5h6M9 15h3.5"/>', s),
     arrow: s => I('<path d="M5 12h14M13 6l6 6-6 6"/>', s),
+    chev: s => I('<path d="M6 9l6 6 6-6"/>', s),
     down: s => I('<path d="M12 4v11M7 10.5l5 5 5-5M5 19.5h14"/>', s),
     copy: s => I('<rect x="8.5" y="8.5" width="11" height="11" rx="2"/><path d="M5.5 15.5h-1v-11h11v1"/>', s),
     trash: s => I('<path d="M5 7h14M10 7V4.5h4V7M7 7l1 13h8l1-13"/>', s),
@@ -38,7 +39,7 @@
   setThemeIcon();
 
   /* ---------- state ---------- */
-  const S = { csv: [], pdf: { FO: null, 'F&B': null }, more: [], err: {}, res: null, sel: 'FO', tab: null, busy: {},
+  const S = { csv: [], pdf: { FO: null, 'F&B': null }, more: [], err: {}, res: null, sel: 'FO', tab: null, busy: {}, open: new Set(),
     opts: store.get('cr-opts', { basis: 'batch', batch: 'auto', dupOnce: true }), merch: store.get("cr-merch", {}), names: Engine.withBuiltIn(store.get("cr-terms", [])), cashiers: store.get("cr-cashiers", {}) };
 
   function toast(t) { const d = document.createElement('div'); d.className = 'toast'; d.textContent = t; document.body.appendChild(d); setTimeout(() => d.remove(), 2400); }
@@ -113,24 +114,24 @@
     const set = (id, { filled, err, busy, sub, icon, file }) => {
       const el = $(id); el.classList.toggle('filled', !!filled); el.classList.toggle('err', !!err);
       el.querySelector('.ico').innerHTML = busy ? '<span class="busy"></span>' : err ? ic.alert(22) : filled ? ic.check(22) : icon;
-      // File name on its own line, in the same style as the line below it.
-      let fl = el.querySelector('.s.file');
-      if (file && !fl) { fl = document.createElement('span'); fl.className = 's file'; el.querySelector('.t').after(fl); }
-      if (fl) { fl.hidden = !file; fl.textContent = file || ''; fl.title = file || ''; }
-      el.querySelector('.s:not(.file)').textContent = sub;
+      // One line per loaded file, each with a small document icon, so it is clear how many files are in.
+      let fl = el.querySelector('.files');
+      if (file?.length && !fl) { fl = document.createElement('span'); fl.className = 'files'; el.querySelector('.t').after(fl); }
+      if (fl) { fl.hidden = !file?.length; fl.innerHTML = (file || []).map(f => `<span class="s file" title="${esc(f.name)}">${ic.doc(14)}<span class="fn">${esc(f.name)}</span>${f.meta ? `<span class="fm">· ${esc(f.meta)}</span>` : ''}</span>`).join(''); }
+      el.querySelector('.txt > .s').textContent = sub;
       let x = el.querySelector('.x');
       if (filled && !x) { x = document.createElement('button'); x.className = 'x'; x.type = 'button'; x.setAttribute('aria-label', 'Remove'); x.innerHTML = ic.x(16); el.appendChild(x);
         x.addEventListener('click', ev => { ev.preventDefault(); ev.stopPropagation(); if (id === '#slot-csv') S.csv = []; else { const d = id === '#slot-FO' ? 'FO' : 'F&B'; S.pdf[d] = null; S.more = S.more.filter(x => x.dept !== d); } run(); }); }
       if (!filled && x) x.remove();
     };
     const rows = S.csv.reduce((a, f) => a + f.rows.length, 0);
-    set('#slot-csv', { filled: S.csv.length, err: S.err.csv, busy: S.busy.csv, icon: ic.grid(22), file: !S.err.csv && S.csv.length ? S.csv.map(f => f.name).join(', ') : '', sub: S.err.csv || (S.csv.length ? `${rows} row${rows === 1 ? "" : "s"}` : "CSV") });
+    set('#slot-csv', { filled: S.csv.length, err: S.err.csv, busy: S.busy.csv, icon: ic.grid(22), file: !S.err.csv && S.csv.length ? S.csv.map(f => ({ name: f.name, meta: S.csv.length > 1 ? `${f.rows.length} row${f.rows.length === 1 ? '' : 's'}` : '' })) : null, sub: S.err.csv || (S.csv.length ? `${S.csv.length > 1 ? `${S.csv.length} files · ` : ''}${rows} row${rows === 1 ? "" : "s"}` : "CSV") });
     const audit = allPdfs().map(p => p.bdate).sort()[0], sd = b => fmtDate(b, { day: 'numeric', month: 'short' });
     for (const [d, id] of [['FO', '#slot-FO'], ['F&B', '#slot-FB']]) {
       const p = S.pdf[d], more = S.more.filter(x => x.dept === d).sort((a, b) => a.bdate.localeCompare(b.bdate));
       const plus = more.length ? ` · + ${more.map(x => sd(x.bdate)).join(', ')} to confirm` : '';
-      const files = p ? [p, ...more].map(x => x.name).join(', ') : '';
-      set(id, { filled: p, err: S.err[d] || (p && !p.grandOk), busy: S.busy[d], icon: ic.doc(22), file: !S.err[d] && p ? files : '',
+      const files = p ? [p, ...more].map(x => ({ name: x.name, meta: more.length ? sd(x.bdate) : '' })) : null;
+      set(id, { filled: p, err: S.err[d] || (p && !p.grandOk), busy: S.busy[d], icon: ic.doc(22), file: !S.err[d] && p ? files : null,
         sub: S.err[d] || (p ? (p.bdate > audit ? `${sd(p.bdate)} · only confirms ${sd(audit)} items` : `${p.rows.length} postings · ${money(p.total)}${p.grandOk ? '' : ' · Grand Total differs'}${plus}`) : 'PDF') });
     }
   }
@@ -242,12 +243,13 @@
   // To fix tab groups: items to act on, items this export can't check, items a later D140 shows were sorted out.
   const splitEx = r => ({ fixes: r.ex.filter(e => e.kind !== 'dup' && e.kind !== 'missing' && !e.settled), rest: r.ex.filter(e => (e.kind === 'dup' || e.kind === 'missing') && !e.settled), late: r.ex.filter(e => e.settled) });
   // Every difference on the To fix tab, in the order the cards are shown.
+  const exTone = e => e.kind === 'dup' || !cents(e.effect) ? 'check' : vc(e.effect);
+  const exItem = e => { const x = e.row; return { label: kindOf(e), tone: e.settled ? 'check' : exTone(e), amt: x.amt, sub: e.kind === 'dup' ? 'counted once' : 'variance ' + money(e.effect, true), hint: e.hint,
+    T: x.side === 'T' ? [x] : x.prior ? [x.prior] : [], D: x.side === 'D' ? (e.late ? [x, e.late] : e.pairD ? [x, e.pairD] : [x]) : e.pair ? [e.pair] : e.late ? [e.late] : [], hl: e.kind === 'tip' ? 'tip' : 'total', tag: kindOf(e) }; };
+  const checkItem = m => ({ label: 'Check', tone: 'check', amt: m.t.reduce((a, y) => a + y.amt, 0), sub: 'balances on amount', hint: m.why + '. Confirm it is the same guest and payment.', T: m.t, D: m.d, hl: 'total', tag: 'Check' });
   function dvItems(r) {
-    const tone = e => e.kind === 'dup' || !cents(e.effect) ? 'check' : vc(e.effect);
-    const ex = e => { const x = e.row; return { label: kindOf(e), tone: e.settled ? 'check' : tone(e), amt: x.amt, sub: e.kind === 'dup' ? 'counted once' : 'variance ' + money(e.effect, true), hint: e.hint,
-      T: x.side === 'T' ? [x] : x.prior ? [x.prior] : [], D: x.side === 'D' ? (e.late ? [x, e.late] : e.pairD ? [x, e.pairD] : [x]) : e.pair ? [e.pair] : e.late ? [e.late] : [], hl: e.kind === 'tip' ? 'tip' : 'total', tag: kindOf(e) }; };
     const { fixes, rest, late } = splitEx(r);
-    return [...fixes.map(ex), ...(r.checks || []).map(m => ({ label: 'Check', tone: 'check', amt: m.t.reduce((a, y) => a + y.amt, 0), sub: 'balances on amount', hint: m.why + '. Confirm it is the same guest and payment.', T: m.t, D: m.d, hl: 'total', tag: 'Check' })), ...rest.map(ex), ...late.map(ex)];
+    return [...fixes.map(exItem), ...(r.checks || []).map(checkItem), ...rest.map(exItem), ...late.map(exItem)];
   }
   const dv = { el: null, items: [], i: 0, page: null, full: false, docs: {} };
   const pdfFor = x => allPdfs().find(p => p.name === x.file) || null;
@@ -264,7 +266,7 @@
       <div class="pv-read">${D.map(d140Text).join('<br>')}${D.some(x => x.page !== dv.page) ? `<br><span class="m">Also on page ${[...new Set(D.filter(x => x.page !== dv.page).map(x => x.page))].join(', ')}</span>` : ''}</div>
       ${p && p.buf && pages > 1 ? `<div class="pv-thumbs">${p.sizes.map((s, k) => `<button class="pv-th${k + 1 === dv.page ? ' on' : ''}${D.some(x => x.page === k + 1) ? ' has' : ''}" data-pg="${k + 1}" aria-label="Page ${k + 1}"><canvas></canvas><span>Page ${k + 1}</span></button>`).join('')}</div>` : ''}</div>`;
     el.innerHTML = `<div class="dv-in">
-      <div class="dv-top"><button class="dv-back" data-a="close">${ic.arrow(18)}<span>To fix</span></button><div class="dv-nav"><button class="icon-btn" data-a="prev" aria-label="Previous difference" ${dv.i ? '' : 'disabled'}>${ic.arrow(18)}</button><span>${dv.i + 1} of ${dv.items.length}</span><button class="icon-btn" data-a="next" aria-label="Next difference" ${dv.i < dv.items.length - 1 ? '' : 'disabled'}>${ic.arrow(18)}</button></div></div>
+      <div class="dv-top"><button class="dv-back" data-a="close">${ic.arrow(18)}<span>${esc(dv.back || 'To fix')}</span></button><div class="dv-nav"><button class="icon-btn" data-a="prev" aria-label="Previous difference" ${dv.i ? '' : 'disabled'}>${ic.arrow(18)}</button><span>${dv.i + 1} of ${dv.items.length}</span><button class="icon-btn" data-a="next" aria-label="Next difference" ${dv.i < dv.items.length - 1 ? '' : 'disabled'}>${ic.arrow(18)}</button></div></div>
       <div class="dv-head"><span class="badge b-${it.tone === 'check' ? 'check' : it.tone}">${esc(it.label)}</span><b class="num dv-amt">${money(it.amt)}</b><small class="v-${it.tone === 'check' ? 'check' : it.tone}">${esc(it.sub)}</small></div>
       <div class="dv-hint">${esc(it.hint)}</div>
       <div class="dv-two"><section><h4>Terminal</h4>${rc}</section><section><h4>Opera D140</h4>${op}</section></div></div>`;
@@ -274,7 +276,7 @@
     el.querySelectorAll('.pv-th').forEach(b => b.addEventListener('click', () => { dv.page = +b.dataset.pg; dv.pinned = dv.i; renderDV(); }));
     if (p && p.buf && D.length) drawPages(p, D, it.tone);
   }
-  async function getDoc(p) { return dv.docs[p.name] = dv.docs[p.name] || pdfjsLib.getDocument({ data: p.buf.slice(0) }).promise; }
+  async function getDoc(p) { return dv.docs[p.name] = dv.docs[p.name] || pdfjsLib.getDocument({ data: p.buf.slice(0), isEvalSupported: false }).promise; }
   async function drawPages(p, D, tone) {
     const at = dv.i, view = dv.el.querySelector('.pv-view'), box = dv.el.querySelector('.pv-page'); if (!view) return;
     try {
@@ -303,24 +305,119 @@
   let dvFocus = null;
   function openDV(i) {
     const r = S.res && S.res[S.sel]; if (!r) return;
+    openDVWith(dvItems(r), i, 'To fix');
+  }
+  // Open the difference view on any list of items; back names the screen it returns to.
+  function openDVWith(items, i, back) {
     if (!dv.el) { dv.el = document.createElement('div'); dv.el.className = 'dv'; dv.el.setAttribute('role', 'dialog'); dv.el.setAttribute('aria-modal', 'true'); dv.el.setAttribute('aria-label', 'Difference details'); document.body.appendChild(dv.el); wireDVSwipe(); }
-    dv.items = dvItems(r); dv.i = i; dv.page = null; dv.pinned = null; dvFocus = document.activeElement;
+    dv.items = items; dv.back = back; dv.i = i; dv.page = null; dv.pinned = null; dvFocus = document.activeElement;
     renderDV(); dv.el.classList.add('open'); lockPage(true);
     history.pushState({ dv: 1 }, ''); setTimeout(() => dv.el.querySelector('.dv-back')?.focus({ preventScroll: true }), 30);
   }
   function closeDV(fromPop) {
     if (!dv.el || !dv.el.classList.contains('open')) return;
-    dv.el.classList.remove('open'); lockPage(false); if (!fromPop && history.state && history.state.dv) history.back();
-    const cards = document.querySelectorAll('#detail .fix.tap'); (cards[dv.i] || dvFocus)?.focus?.({ preventScroll: true });
+    dv.el.classList.remove('open'); lockPage(false); if (!fromPop && history.state && history.state.dv) { skipPop = true; history.back(); }
+    const cards = dv.back === 'To fix' ? document.querySelectorAll('#detail .fix.tap') : []; (cards[dv.i] || dvFocus)?.focus?.({ preventScroll: true });
   }
-  window.addEventListener('popstate', () => closeDV(true));
-  document.addEventListener('keydown', e => { if (!dv.el || !dv.el.classList.contains('open')) return; if (e.key === 'Escape') closeDV(); else if (e.key === 'ArrowRight' && !e.target.closest('input')) go(1); else if (e.key === 'ArrowLeft' && !e.target.closest('input')) go(-1); });
+  // Back closes the top screen only: the difference view first, then the terminal view under it.
+  let skipPop = false; // set when a screen closed itself and stepped history back, so that step does not close the screen under it
+  window.addEventListener('popstate', () => { if (skipPop) { skipPop = false; return; } if (dv.el && dv.el.classList.contains('open')) closeDV(true); else closeTV(true); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && tv.el && tv.el.classList.contains('open') && !(dv.el && dv.el.classList.contains('open'))) { closeTV(); return; } if (!dv.el || !dv.el.classList.contains('open')) return; if (e.key === 'Escape') closeDV(); else if (e.key === 'ArrowRight' && !e.target.closest('input')) go(1); else if (e.key === 'ArrowLeft' && !e.target.closest('input')) go(-1); });
   // Swipe left / right anywhere except on the D140 page (which scrolls sideways itself).
   function wireDVSwipe() {
     let x0 = null, y0 = 0, horiz = null;
     dv.el.addEventListener('touchstart', e => { if (e.touches.length !== 1 || e.target.closest('.pv-view,.pv-thumbs')) { x0 = null; return; } x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; horiz = null; }, { passive: true });
     dv.el.addEventListener('touchmove', e => { if (x0 === null) return; const dx = e.touches[0].clientX - x0, dy = e.touches[0].clientY - y0; if (horiz === null && Math.hypot(dx, dy) > 10) horiz = Math.abs(dx) > Math.abs(dy) * 1.4; }, { passive: true });
     dv.el.addEventListener('touchend', e => { if (x0 === null || !horiz) { x0 = null; return; } const dx = e.changedTouches[0].clientX - x0; x0 = null; if (Math.abs(dx) > Math.min(110, innerWidth * 0.25)) go(dx < 0 ? 1 : -1); });
+  }
+
+  /* ---------- terminal view (tap a terminal tile) ---------- */
+  // One terminal as one long terminal receipt: our heading, a settlement enquiry worked out from the export,
+  // then the transaction history with the items to fix and check first (highlighted), a torn edge, and every other
+  // transaction below it (plain). Tapping a transaction opens the receipt and D140 view for it.
+  const tv = { el: null, t: null, items: [], focus: null };
+  function tvData(r, t) {
+    const rows = (r.tRows || []).filter(y => y.term === t).sort((a, b) => ((a.date || '') + ' ' + a.time).localeCompare((b.date || '') + ' ' + b.time));
+    const st = new Map();
+    for (const m of r.matches) for (const y of m.t) st.set(y, { m });
+    for (const m of r.checks || []) for (const y of m.t) st.set(y, { c: m });
+    for (const e of r.ex) if (e.row.side === 'T' && e.kind !== 'missing') st.set(e.row, { e });
+    // Items the tile counts but tonight's total leaves out (a row shown twice in the export) still go in the flagged part.
+    const extra = r.ex.filter(e => e.row.side === 'T' && e.kind !== 'missing' && e.row.term === t && !rows.includes(e.row)).map(e => e.row);
+    const flagged = [...rows.filter(y => st.get(y)?.e || st.get(y)?.c), ...extra], rest = rows.filter(y => !flagged.includes(y));
+    const where = x => `${x.name}, Room ${x.room}, D140 page ${x.page}${x.receipt ? ', #' + x.receipt : ''}${x.by ? ', posted by ' + x.by : ''}`;
+    const item = y => { const s = st.get(y) || {};
+      if (s.e) return exItem(s.e);
+      if (s.c) return checkItem(s.c);
+      if (s.m) return { label: 'Matched', tone: 'ok', amt: y.amt, sub: s.m.how === 'tip' ? 'matched, tip included' : 'matches Opera', hint: `Matched to ${s.m.d.map(where).join(' and ')}.`, T: s.m.t, D: s.m.d, hl: 'total', tag: 'Matched' };
+      return { label: 'Counted', tone: 'ok', amt: y.amt, sub: 'in tonight\'s total', hint: 'Counted in tonight\'s terminal total.', T: [y], D: [], hl: 'total', tag: '' };
+    };
+    const flag = y => { const s = st.get(y) || {}; return s.e ? { tag: kindOf(s.e), tone: s.e.settled ? 'check' : exTone(s.e), hint: s.e.hint } : s.c ? { tag: 'Check', tone: 'check', hint: s.c.why + '. Confirm it is the same guest and payment.' } : null; };
+    return { rows, flagged, rest, flag, items: [...flagged, ...rest].map(item) };
+  }
+  // Settlement enquiry, laid out like the terminal's own slip. Worked out from tonight's counted rows.
+  function settleHtml(rows, t) {
+    const kind = y => /REFUND/.test(y.status || '') || y.amt < 0 ? 'REFUND' : /COMPLETION/.test(y.status || '') ? 'COMPLETION' : 'PURCHASE';
+    const sum = (types, k) => { const z = rows.filter(y => (!types || types.includes(y.type)) && (!k || kind(y) === k)); return [z.length, z.reduce((a, y) => a + y.amt, 0)]; };
+    const line = (l, [n, a]) => `<div class="se-r"><span>${l}</span><span>${n}</span><span>${money(a)}</span></div>`;
+    const block = (title, types, last) => `<div class="se-h">${title}</div>${['PURCHASE', 'COMPLETION', 'REFUND'].map(k => { const s = sum(types, k); return s[0] ? line(k, s) : ''; }).join('')}${line('Net Total', sum(types))}${last ? '' : '<hr>'}`;
+    const known = ['EFTPOS', 'MC', 'VISA', 'Union Pay', 'Amex', 'JCB'], others = [...new Set(rows.map(y => y.type))].filter(x => !known.includes(x));
+    const trans = rows.map(y => String(y.rrn || '').slice(-6)).filter(Boolean).sort(), f = rows[0], l = rows[rows.length - 1];
+    const dm = (d, tm) => { const m = String(d || '').match(/\d\d(\d\d)-(\d\d)-(\d\d)/); return (m ? `${m[3]}/${m[2]}/${m[1]} ` : '') + time12(tm); };
+    const kv = [['MID', f?.mid || ''], ['Terminal ID', t], ['BATCH ID', f?.batch || ''], ['TRAN', trans.length ? `${trans[0]}-${trans[trans.length - 1]}` : ''], ['FROM', f ? dm(f.date, f.time) : ''], ['TO', l ? dm(l.date, l.time) : '']].filter(([, v]) => v);
+    return `<div class="se-t">SETTLEMENT ENQUIRY</div><div class="se-k">${kv.map(([k, v]) => `<span>${k}</span><span>: ${esc(v)}</span>`).join('')}</div><hr>
+      ${block('DEBIT', ['EFTPOS'])}${block('MASTERCARD', ['MC'])}${block('VISA', ['VISA'])}${block('UNIONPAY', ['Union Pay'])}${block('SUBTOTAL', ['EFTPOS', 'MC', 'VISA', 'Union Pay'])}
+      ${block('AMEX', ['Amex'])}${block('JCB', ['JCB'])}${others.map(o => block(esc(o).toUpperCase(), [o])).join('')}${block('Combined Total', null, true)}<div class="rc-c se-ok">APPROVED</div>`;
+  }
+  // One transaction on the long receipt, like a line of the terminal's transaction history.
+  function histTx(y, f, i) {
+    const [status, line] = stLabel(y.status || ''), base = y.grat ? y.amt - y.grat : y.amt, $a = n => (n < 0 ? '-$' : '$') + plain(Math.abs(n));
+    const hl = f ? ` hl t-${f.tone}` : '', tag = f ? ` <i class="tag t-${f.tone}">${esc(f.tag)}</i>` : '';
+    return `<div class="ht${f ? ' ht-flag' : ''}" data-i="${i}" role="button" tabindex="0" aria-label="${esc((CARDNAME[y.type] || y.type) + ' ' + y.l4 + ', ' + money(y.amt) + (f ? ', ' + f.tag : '') + ', open receipt and D140')}">
+      <div class="rc-r"><span>${esc(CARDNAME[y.type] || y.card || y.type)}</span><span>........${esc(y.l4)}</span></div>
+      ${ENTRY[y.entry] ? `<div class="rc-r"><span>${ENTRY[y.entry]}</span><span></span></div>` : ''}
+      ${y.rrn ? `<div class="rc-r"><span>TRAN</span><span>${esc(String(y.rrn).slice(-6))}</span></div>` : ''}
+      <div class="rc-r"><span>Time</span><span>${time12(y.time)}</span></div>
+      ${y.rrn ? `<div class="rc-r"><span>RRN</span><span>${esc(y.rrn)}</span></div>` : ''}
+      <div class="rc-r"><span>Status</span><span>${esc(status)}</span></div>
+      <div class="rc-r"><span>Outcome</span><span>${/DECLINED/.test(y.status || '') ? 'Declined' : 'Approved'}</span></div>
+      <div class="rc-r"><span>${esc(line)}</span><span>${$a(base)}</span></div>
+      ${y.grat ? `<div class="rc-r"><span>Tip</span><span>${$a(y.grat)}</span></div>` : ''}
+      <div class="rc-r${hl}"><span>Total${tag}</span><span>${$a(y.amt)}</span></div>
+      ${f ? `<div class="ht-why">${esc(f.hint)}</div>` : ''}<hr></div>`;
+  }
+  function renderTV() {
+    const r = S.res && S.res[S.sel], t = tv.t, el = tv.el;
+    if (!r || !r.terms.includes(t)) return closeTV();
+    const D = tvData(r, t), name = tname(r, t), y0 = D.rows[0]; tv.items = D.items;
+    const total = D.rows.reduce((a, y) => a + y.amt, 0), nf = D.flagged.length;
+    const head = `<div class="rc-logo">${ic.pos(20)}Terminal receipt</div><div class="rc-c rc-tn">${esc(name)}</div>
+      <div class="rc-c">${y0 && y0.mid ? `Merchant ID: ${esc(y0.mid)}<br>` : ''}Terminal ID: ${esc(t)}</div><div class="rc-gap"></div>`;
+    const hist = `<hr><div class="rc-c">Transaction History<br>${longDate(y0 ? y0.date : r.bd)}</div><hr>`;
+    const first = nf ? `<div class="ht-l">TO FIX AND CHECK (${nf})</div>${D.flagged.map((y, i) => histTx(y, D.flag(y), i)).join('')}`
+      : `<div class="ht-ok">${ic.check(18)}<span>Nothing to fix or check on this terminal.</span></div><hr>`;
+    el.innerHTML = `<div class="dv-in tv-in">
+      <div class="dv-top"><button class="dv-back" data-a="close">${ic.arrow(18)}<span>${esc(deptName(S.sel))}</span></button></div>
+      <div class="lr">
+        <div class="rc lr-top">${head}${settleHtml(D.rows, t)}${hist}${first}<div class="rc-note">${D.rows.length} transaction${D.rows.length === 1 ? '' : 's'} · ${money(total)}</div></div>
+        ${D.rest.length ? `<div class="lr-cut">✂ ${D.rest.length} more transaction${D.rest.length === 1 ? '' : 's'} below</div>
+        <div class="rc lr-cont"><div class="ht-l">ALL OTHER TRANSACTIONS (${D.rest.length})</div>${D.rest.map((y, j) => histTx(y, null, nf + j)).join('')}<div class="rc-note">End of ${esc(name)} · rebuilt from the terminal export</div></div>` : ''}
+      </div></div>`;
+    el.scrollTop = 0;
+    el.querySelector('[data-a="close"]').addEventListener('click', () => closeTV());
+    el.querySelectorAll('.ht[data-i]').forEach(b => { const open = () => openDVWith(tv.items, +b.dataset.i, name);
+      b.addEventListener('click', open); b.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } }); });
+  }
+  function openTV(t) {
+    if (!tv.el) { tv.el = document.createElement('div'); tv.el.className = 'dv tview'; tv.el.setAttribute('role', 'dialog'); tv.el.setAttribute('aria-modal', 'true'); document.body.appendChild(tv.el); }
+    tv.t = t; tv.focus = document.activeElement; renderTV();
+    tv.el.setAttribute('aria-label', 'Terminal ' + t); tv.el.classList.add('open'); lockPage(true);
+    history.pushState({ tv: 1 }, ''); setTimeout(() => tv.el.querySelector('.dv-back')?.focus({ preventScroll: true }), 30);
+  }
+  function closeTV(fromPop) {
+    if (!tv.el || !tv.el.classList.contains('open')) return;
+    tv.el.classList.remove('open'); lockPage(false); if (!fromPop && history.state && history.state.tv) { skipPop = true; history.back(); }
+    tv.focus?.focus?.({ preventScroll: true });
   }
   function sheetTSV(r) {
     const types = sheetTypes(r);
@@ -348,23 +445,25 @@
     const tVar = {}; let anyVar = false; for (const e of r.ex) if (e.row.side === 'T' && e.kind !== 'missing') tVar[e.row.term] = (tVar[e.row.term] || 0) + e.effect;
     anyVar = Object.values(tVar).some(x => cents(x));
     const terms = r.terms.map(t => { const v = tVar[t] || 0, n = r.ex.filter(e => e.row.side === 'T' && e.kind !== 'missing' && e.row.term === t).length;
-      return `<div class="term${cents(v) ? ' has-var' : ''}"><div class="id">${ic.pos(16)}${esc(tname(r, t))}</div><div class="org">${esc(r.termOrg[t])} · ${esc(t)}</div><div class="amt num">${money(r.termTot[t] || 0)}</div>${cents(v) ? `<span class="tflag ${vc(v)}" title="Variance on this terminal" aria-label="Variance on this terminal">${ic.alert(14)}</span><div class="tvar ${vc(v)}">${money(v, true)} <small>· ${n} to fix</small></div>` : anyVar ? '<div class="tvar" aria-hidden="true">&nbsp;</div>' : ''}</div>`; }).join('');
+      return `<div class="term tap${cents(v) ? ' has-var' : ''}" data-t="${esc(t)}" role="button" tabindex="0" aria-label="${esc(tname(r, t))}, ${money(r.termTot[t] || 0)}, open transactions"><div class="id">${ic.pos(16)}${esc(tname(r, t))}</div><div class="org">${esc(r.termOrg[t])} · ${esc(t)}</div><div class="amt num">${money(r.termTot[t] || 0)}</div>${cents(v) ? `<span class="tflag ${vc(v)}" title="Variance on this terminal" aria-label="Variance on this terminal">${ic.alert(14)}</span><div class="tvar ${vc(v)}">${money(v, true)} <small>· ${n} to fix</small></div>` : anyVar ? '<div class="tvar" aria-hidden="true">&nbsp;</div>' : ''}</div>`; }).join('');
 
     let body = '';
+    // Sections under To fix fold away: a "View all <word>" button opens each one. Open ones stay open while you work.
+    const sec = (k, title, word, desc, inner) => `<details class="sec" data-k="${k}"${S.open.has(k) ? ' open' : ''}><summary><span class="sh"><h3>${title}</h3><span class="tog"><span class="tv">View all ${word}</span><span class="th">Hide ${word}</span>${ic.chev(16)}</span></span>${desc ? `<p>${desc}</p>` : ''}</summary><div class="sb">${inner}</div></details>`;
     if (S.tab === 'fix') {
       body = fixes.length ? `<div class="fixes">${fixes.map(fixCard).join('')}</div>` : checks.length || late.length ? '' : `<div class="nothing">${ic.party(40)}<b>Nothing to fix</b><span>Every posting matches a terminal transaction.</span></div>`;
-      if (checks.length) body += `<h3 style="margin:${fixes.length ? 22 : 0}px 0 4px;font-size:15px">Check these (${checks.length})</h3><p style="margin:0 0 12px;color:var(--muted);font-size:13px">These balance only on amount. They may be fine, or two separate mistakes that cancel out. Look at both sides.</p><div class="fixes">${checks.map(checkCard).join('')}</div>`;
-      if (rest.length) body += `<h3 style="margin:22px 0 12px;font-size:15px">Can't be checked with this export (${rest.length})</h3><div class="fixes">${rest.map(fixCard).join('')}</div>`;
-      if (late.length) body += `<h3 style="margin:22px 0 4px;font-size:15px">Explained, nothing to post (${late.length})</h3><p style="margin:0 0 12px;color:var(--muted);font-size:13px">Still a difference on this night's D140, but explained: posted or reversed on another night, or corrected. Nothing to post now.</p><div class="fixes">${late.map(fixCard).join('')}</div>`;
+      if (checks.length) body += sec('check', `Check these (${checks.length})`, 'checks', 'These balance only on amount. They may be fine, or two separate mistakes that cancel out. Look at both sides.', `<div class="fixes">${checks.map(checkCard).join('')}</div>`);
+      if (rest.length) body += sec('rest', `Can't be checked with this export (${rest.length})`, "can't check", '', `<div class="fixes">${rest.map(fixCard).join('')}</div>`);
+      if (late.length) body += sec('late', `Explained, nothing to post (${late.length})`, 'explained', "Still a difference on this night's D140, but explained: posted or reversed on another night, or corrected. Nothing to post now.", `<div class="fixes">${late.map(fixCard).join('')}</div>`);
       if (doneLater.length) { const ok = doneLater.filter(y => y.confirm).length, fu = (r.followUp || []).length;
-        body += `<h3 style="margin:22px 0 4px;font-size:15px">Completed after this date, not counted (${doneLater.length} · ${money(doneLater.reduce((a, y) => a + y.amt, 0))})</h3><p style="margin:0 0 12px;color:var(--muted);font-size:13px">Pre-auths taken on this date whose amount changed when they were completed later, usually at check-out. The export shows them under the pre-auth's date. ${!fu ? 'Load the next day\'s D140 to confirm each one, or check the RRN in the portal.' : ok === doneLater.length ? 'All of them are posted on the later D140. Nothing to do.' : (doneLater.length - ok) + ' not found on the later D140: check the RRN in the portal.'}</p><div class="list">${doneLater.map(y => `<div class="lrow"><span class="g">${esc(y.type)} ••${esc(y.l4)}<small style="display:block;font-weight:500;color:var(--muted);font-size:12px">Pre-auth ${money(y.orig)} → ${money(y.amt)} · RRN ${esc(y.rrn)}</small></span><span class="m room">${esc(y.time)}</span><span class="m pg">${y.confirm ? 'Rm ' + esc(y.confirm.room) : ''}</span><span class="m rc">${y.confirm ? 'p.' + esc(y.confirm.page) : ''}</span><span class="amtc num">${money(y.amt)}</span><span class="move">${y.confirm ? `<span class="chip to">Posted ${esc(fmtDate(y.confirm.bd, { day: 'numeric', month: 'short' }))} ${esc(y.confirm.time)}</span><span class="m">${esc(y.confirm.name)}${y.confirm.by ? ' · by ' + esc(y.confirm.by) : ''}</span>` : `<span class="chip from" style="text-decoration:none">${fu ? 'Not on later D140' : 'To confirm'}</span><span class="m">${esc(y.tn)}</span>`}</span></div>`).join('')}</div>`; }
-      if (otherNight.length) body += `<h3 style="margin:22px 0 4px;font-size:15px">From another night, not counted (${otherNight.length})</h3><p style="margin:0 0 12px;color:var(--muted);font-size:13px">Completions in this export from a different batch that match nothing in tonight's D140.</p><div class="list">${otherNight.map(y => `<div class="lrow"><span class="g">${esc(y.type)} ••${esc(y.l4)}</span><span class="m room">Batch ${esc(y.batch || '')}</span><span class="m pg">${esc(y.date || '')}</span><span class="m rc">${esc(y.time)}</span><span class="amtc num">${money(y.amt)}</span><span class="move"><span class="chip to">${esc(y.tn)}</span></span></div>`).join('')}</div>`;
-      if (nonCard.length) body += `<h3 style="margin:22px 0 4px;font-size:15px">Not card payments, not checked (${nonCard.length})</h3><div class="list">${nonCard.map(x => `<div class="lrow"><span class="g">${esc(x.name)}${x.by ? " · by " + esc(x.by) : ""}</span><span class="m room">Rm ${esc(x.room)}</span><span class="m pg">p.${esc(x.page)}</span><span class="m rc">${esc(x.code)}</span><span class="amtc num">${money(x.amt)}</span><span class="move"></span></div>`).join('')}</div>`;
+        body += sec('donelater', `Completed after this date, not counted (${doneLater.length} · ${money(doneLater.reduce((a, y) => a + y.amt, 0))})`, 'completed later', `Pre-auths taken on this date whose amount changed when they were completed later, usually at check-out. The export shows them under the pre-auth's date. ${!fu ? 'Load the next day\'s D140 to confirm each one, or check the RRN in the portal.' : ok === doneLater.length ? 'All of them are posted on the later D140. Nothing to do.' : (doneLater.length - ok) + ' not found on the later D140: check the RRN in the portal.'}`, `<div class="list">${doneLater.map(y => `<div class="lrow"><span class="g">${esc(y.type)} ••${esc(y.l4)}<small style="display:block;font-weight:500;color:var(--muted);font-size:12px">Pre-auth ${money(y.orig)} → ${money(y.amt)} · RRN ${esc(y.rrn)}</small></span><span class="m room">${esc(y.time)}</span><span class="m pg">${y.confirm ? 'Rm ' + esc(y.confirm.room) : ''}</span><span class="m rc">${y.confirm ? 'p.' + esc(y.confirm.page) : ''}</span><span class="amtc num">${money(y.amt)}</span><span class="move">${y.confirm ? `<span class="chip to">Posted ${esc(fmtDate(y.confirm.bd, { day: 'numeric', month: 'short' }))} ${esc(y.confirm.time)}</span><span class="m">${esc(y.confirm.name)}${y.confirm.by ? ' · by ' + esc(y.confirm.by) : ''}</span>` : `<span class="chip from" style="text-decoration:none">${fu ? 'Not on later D140' : 'To confirm'}</span><span class="m">${esc(y.tn)}</span>`}</span></div>`).join('')}</div>`); }
+      if (otherNight.length) body += sec('other', `From another night, not counted (${otherNight.length})`, 'other nights', "Completions in this export from a different batch that match nothing in tonight's D140.", `<div class="list">${otherNight.map(y => `<div class="lrow"><span class="g">${esc(y.type)} ••${esc(y.l4)}</span><span class="m room">Batch ${esc(y.batch || '')}</span><span class="m pg">${esc(y.date || '')}</span><span class="m rc">${esc(y.time)}</span><span class="amtc num">${money(y.amt)}</span><span class="move"><span class="chip to">${esc(y.tn)}</span></span></div>`).join('')}</div>`);
+      if (nonCard.length) body += sec('noncard', `Not card payments, not checked (${nonCard.length})`, 'non-card', '', `<div class="list">${nonCard.map(x => `<div class="lrow"><span class="g">${esc(x.name)}${x.by ? " · by " + esc(x.by) : ""}</span><span class="m room">Rm ${esc(x.room)}</span><span class="m pg">p.${esc(x.page)}</span><span class="m rc">${esc(x.code)}</span><span class="amtc num">${money(x.amt)}</span><span class="move"></span></div>`).join('')}</div>`);
       const xi = r.crossIn || [], xo = r.crossOut || [];
-      if (xi.length || xo.length) body += `<h3 style="margin:22px 0 4px;font-size:15px">Used another department's terminal (${xi.length + xo.length})</h3><p style="margin:0 0 12px;color:var(--muted);font-size:13px">Nothing to fix in Opera. Each charge is counted in the department where it was posted.</p><div class="list">${
+      if (xi.length || xo.length) body += sec('cross', `Used another department's terminal (${xi.length + xo.length})`, 'other department', 'Nothing to fix in Opera. Each charge is counted in the department where it was posted.', `<div class="list">${
         xi.map(c => `<div class="lrow"><span class="g">${esc(c.d ? c.d.name + ' · Rm ' + c.d.room : 'No posting matched')}</span><span class="m room">Posted ${esc(S.sel)}</span><span class="m pg">${c.d ? 'p.' + esc(c.d.page) : ''}</span><span class="m rc">${c.d && c.d.receipt ? '#' + esc(c.d.receipt) : ''}</span><span class="amtc num">${money(c.t.amt)}</span><span class="move"><span class="chip to">${esc(c.t.tn)} · ${esc(c.t.org)}</span><span class="m">${esc(c.t.time)} · ${esc(c.t.type)} ••${esc(c.t.l4)}</span></span></div>`).join('') +
-        xo.map(c => `<div class="lrow"><span class="g">${esc(c.t.type)} ••${esc(c.t.l4)}${c.d ? ' · ' + esc(c.d.name) : ''}</span><span class="m room">Posted ${esc(c.d ? c.d.dept : '')}</span><span class="m pg">${c.d ? 'p.' + esc(c.d.page) : ''}</span><span class="m rc">${c.d && c.d.receipt ? '#' + esc(c.d.receipt) : ''}</span><span class="amtc num">${money(c.t.amt)}</span><span class="move"><span class="chip to">${esc(c.t.tn)} · ${esc(c.t.org)}</span><span class="m">${esc(c.t.time)}</span></span></div>`).join('')}</div>`;
-      if (r.offsets.length) body += `<h3 style="margin:22px 0 12px;font-size:15px">Cancel out, no effect (${r.offsets.length})</h3><div class="list">${r.offsets.map(o => `<div class="lrow"><span class="g">${esc(o.side === 'Opera' ? o.a.name + ' · Rm ' + o.a.room : o.a.type + ' ••' + o.a.l4)}</span><span class="m room">${esc(o.side)}</span><span class="m pg">${o.side === 'Opera' ? 'p.' + esc(o.a.page) : ''}</span><span class="m rc">${esc(o.a.time)} / ${esc(o.b.time)}</span><span class="amtc num">${money(o.a.amt)}</span><span class="move"><span class="chip to">+${plain(o.a.amt)}</span><span class="chip from" style="text-decoration:none">${plain(o.b.amt)}</span></span></div>`).join('')}</div>`;
+        xo.map(c => `<div class="lrow"><span class="g">${esc(c.t.type)} ••${esc(c.t.l4)}${c.d ? ' · ' + esc(c.d.name) : ''}</span><span class="m room">Posted ${esc(c.d ? c.d.dept : '')}</span><span class="m pg">${c.d ? 'p.' + esc(c.d.page) : ''}</span><span class="m rc">${c.d && c.d.receipt ? '#' + esc(c.d.receipt) : ''}</span><span class="amtc num">${money(c.t.amt)}</span><span class="move"><span class="chip to">${esc(c.t.tn)} · ${esc(c.t.org)}</span><span class="m">${esc(c.t.time)}</span></span></div>`).join('')}</div>`);
+      if (r.offsets.length) body += sec('offsets', `Cancel out, no effect (${r.offsets.length})`, 'cancel outs', '', `<div class="list">${r.offsets.map(o => `<div class="lrow"><span class="g">${esc(o.side === 'Opera' ? o.a.name + ' · Rm ' + o.a.room : o.a.type + ' ••' + o.a.l4)}</span><span class="m room">${esc(o.side)}</span><span class="m pg">${o.side === 'Opera' ? 'p.' + esc(o.a.page) : ''}</span><span class="m rc">${esc(o.a.time)} / ${esc(o.b.time)}</span><span class="amtc num">${money(o.a.amt)}</span><span class="move"><span class="chip to">+${plain(o.a.amt)}</span><span class="chip from" style="text-decoration:none">${plain(o.b.amt)}</span></span></div>`).join('')}</div>`);
     } else if (S.tab === 'codes') {
       body = r.wrong.length ? `<div class="lhead"><span>Guest</span><span>Room</span><span>Page</span><span>Receipt</span><span>Amount</span><span>Move code</span></div><div class="list">${r.wrong.map(w => `<div class="lrow"><span class="g">${esc(w.x.name)}${w.x.by ? `<small style="display:block;font-weight:500;color:var(--muted);font-size:12px">by ${esc(w.x.by)}</small>` : ""}</span><span class="m room">${esc(w.x.room)}</span><span class="m pg">p.${esc(w.x.page)}</span><span class="m rc">${w.x.receipt ? '#' + esc(w.x.receipt) : esc(w.x.ref.slice(-8))}</span><span class="amtc num">${money(w.x.amt)}</span><span class="move"><span class="chip from">${esc(w.x.code)} ${esc(w.from)}</span>${ic.arrow(16)}<span class="chip to">${esc(w.toCode)} ${esc(w.to)}</span><span class="m">••${esc(w.y.l4)} · ${esc(w.y.tn)} ${esc(w.y.time)}</span></span></div>`).join('')}</div>`
         : `<div class="nothing">${ic.party(40)}<b>All on the right card code</b></div>`;
@@ -387,6 +486,8 @@
       c.insertAdjacentHTML('beforeend', `<div class="more">See receipt and D140 page${ic.arrow(16)}</div>`);
       c.addEventListener('click', () => openDV(i)); c.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDV(i); } });
     });
+    el.querySelectorAll('details.sec').forEach(d => d.addEventListener('toggle', () => { if (d.open) S.open.add(d.dataset.k); else S.open.delete(d.dataset.k); }));
+    el.querySelectorAll('.term[data-t]').forEach(c => { c.addEventListener('click', () => openTV(c.dataset.t)); c.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openTV(c.dataset.t); } }); });
     el.querySelectorAll('.seg button').forEach(b => b.addEventListener('click', () => { S.sel = b.dataset.d; S.tab = null; renderReceipts(false); renderDetail(); }));
     el.querySelectorAll('.tabs button').forEach(b => b.addEventListener('click', () => { S.tab = b.dataset.t; const x = el.querySelector('.tabs').scrollLeft; renderDetail(); const t = $('#detail .tabs'); if (t) t.scrollLeft = x; }));
     { const t = el.querySelector('.tabs'), on = t && t.querySelector('.on'); if (t && on && t.scrollWidth > t.clientWidth) { const l = on.offsetLeft - 18, r = on.offsetLeft + on.offsetWidth - t.clientWidth + 18; if (t.scrollLeft > l) t.scrollLeft = l; else if (t.scrollLeft < r) t.scrollLeft = r; } }
@@ -517,7 +618,9 @@
   // Side panel: locks the page behind it, takes focus, closes with Esc, the scrim, the X or a swipe to the right.
   let lastFocus = null, lockY = 0;
   // Pin the page in place behind the panel (works on iPhone, where overflow:hidden alone does not).
-  const lockPage = on => { const b = document.body; if (on) { lockY = scrollY; Object.assign(b.style, { position: 'fixed', top: -lockY + 'px', left: '0', right: '0', width: '100%' }); } else { Object.assign(b.style, { position: '', top: '', left: '', right: '', width: '' }); scrollTo({ top: lockY, behavior: 'instant' }); } };
+  // Counted, so panels stacked on top of each other (terminal view, then a difference) unlock only when the last one closes.
+  let lockN = 0;
+  const lockPage = on => { if (on ? lockN++ > 0 : (lockN = Math.max(0, lockN - 1)) > 0) return; const b = document.body; if (on) { lockY = scrollY; Object.assign(b.style, { position: 'fixed', top: -lockY + 'px', left: '0', right: '0', width: '100%' }); } else { Object.assign(b.style, { position: '', top: '', left: '', right: '', width: '' }); scrollTo({ top: lockY, behavior: 'instant' }); } };
   function openDrawer(title, html) {
     const d = $('#drawer'), wasOpen = d.classList.contains('open');
     $('#drawer-title').textContent = title; $('#drawer-body').innerHTML = html;

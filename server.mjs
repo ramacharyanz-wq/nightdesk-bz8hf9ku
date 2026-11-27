@@ -14,7 +14,10 @@ http.createServer(async (req, res) => {
     let p = decodeURIComponent(new URL(req.url, 'http://x').pathname);
     if (p.endsWith('/')) p += 'index.html';
     const file = normalize(join(ROOT, p));
-    if (!file.startsWith(ROOT) || /server\.mjs$|\.command$/.test(file)) { res.writeHead(403); return res.end(); }
+    // Serve only the app's own files. Anything else in the folder (HANDOFF.md has guest names and card digits,
+    // mock pages, .git, test data) must never be reachable from another device on the Wi-Fi.
+    const rel = file.slice(ROOT.length + 1), ok = /^(index\.html|app\.js|engine\.js|report\.js|styles\.css|manifest\.webmanifest|icon[\w-]*\.(png|svg)|fonts\/[\w-]+\.woff2|vendor\/[\w.-]+\.js)$/;
+    if (!file.startsWith(ROOT + '/') || !ok.test(rel)) { res.writeHead(404); return res.end('Not found'); }
     const body = await readFile(file);
     res.writeHead(200, { 'Content-Type': TYPES[extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-cache' });
     res.end(body);

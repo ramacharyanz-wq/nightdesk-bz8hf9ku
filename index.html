@@ -3,6 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<!-- Privacy lock: files are read on this device only. The browser refuses any network connection from this page
+     (connect-src 'none'), any outside script, font or image, and any form submission, so the CSV and D140s can never be sent anywhere. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'sha256-MalAmVCfyUPvEQjAP4U+JBvYHzCRN8uC7WqPG0X2fEs='; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: blob:; manifest-src 'self'; connect-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'; frame-src 'none'">
+<meta name="referrer" content="no-referrer">
 <meta name="theme-color" content="#121d33">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
@@ -12,7 +16,7 @@
 <link rel="apple-touch-icon" href="icon-180.png">
 <link rel="manifest" href="manifest.webmanifest">
 <title>Card Recon</title>
-<link rel="stylesheet" href="styles.css?v=20261127d">
+<link rel="stylesheet" href="styles.css?v=20261127k">
 <script>try{const t=localStorage.getItem('cr-theme');if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
 </head>
 <body>
@@ -43,8 +47,8 @@
 <script src="vendor/pdf.min.js"></script>
 <script src="vendor/jspdf.umd.min.js"></script>
 <script src="vendor/jspdf.plugin.autotable.min.js"></script>
-<script src="engine.js?v=20261127d"></script>
-<script src="report.js?v=20261127d"></script>
-<script src="app.js?v=20261127d"></script>
+<script src="engine.js?v=20261127k"></script>
+<script src="report.js?v=20261127k"></script>
+<script src="app.js?v=20261127k"></script>
 </body>
 </html>

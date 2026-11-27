@@ -2,3 +2,10 @@ HANDOFF.md
 .DS_Store
 testdata/
 mock-*.html
+# Hotel data never goes in this public repo
+*.csv
+*.pdf
+*.xlsx
+*.xls
+*.bundle
+private/
